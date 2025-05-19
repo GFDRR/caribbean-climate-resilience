@@ -17,6 +17,7 @@ lib/
 lib64/
 parts/
 sdist/
+archive/
 var/
 wheels/
 pip-log.txt
