@@ -1,0 +1,3 @@
+iso_code: "GRD"
+aerial_image_file: "ortho_GRD.tif"
+bldgs_file: "ortho_GRD.gpkg"  

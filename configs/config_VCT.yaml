@@ -1,0 +1,14 @@
+iso_code: "VCT"
+aerial_image_file: "sat_VCT.tif"
+bldgs_file: "ms_VCT.geojson"
+bldgs_src: "ms"
+n_samples: 150
+scale: 2
+
+image_urls: [
+    "https://oin-hotosm-temp.s3.amazonaws.com/607607bd30bfb300075affd8/0/607607bd30bfb300075affd9.tif",
+    "https://oin-hotosm-temp.s3.amazonaws.com/6076075b30bfb300075affd6/0/6076075b30bfb300075affd7.tif",
+    "https://oin-hotosm-temp.s3.amazonaws.com/6076061c30bfb300075affd4/0/6076061c30bfb300075affd5.tif",
+    "https://oin-hotosm-temp.s3.amazonaws.com/6076080230bfb300075affdb/0/6076080230bfb300075affdc.tif"
+]  
+

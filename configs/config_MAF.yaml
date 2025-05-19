@@ -1,0 +1,9 @@
+iso_code: "MAF"
+aerial_image_file: "ortho_MAF.tif"
+bldgs_file: "ms_MAF.geojson"
+region: "north-america"
+image_urls: [
+    "https://oin-hotosm-temp.s3.amazonaws.com/59ba90ef23c8440011d7b194/0/53cf7018-0035-46b3-9fb1-f694ecf4c486.tif"
+]  
+bldgs_src: "ms"
+n_samples: 50
