@@ -1,2 +1,2 @@
-roof_material: ["concrete/cement", "healthy_metal", "irregular_metal", "tarpaulin", "incomplete", "cloud_cover"]
-roof_pitch: ["hip", "gable", "flat", "no_roof", "cloud_cover"]
+roof_material: ["tile", "concrete/cement", "healthy_metal", "irregular_metal", "tarpaulin", "incomplete",]
+roof_pitch: ["hip", "gable", "flat", "no_roof"]
