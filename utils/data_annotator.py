@@ -2,6 +2,10 @@ import os
 import time
 import logging
 import datetime
+
+import cv2
+import numpy as np
+import pandas as pd
 import geopandas as gpd
 
 import traitlets
@@ -13,6 +17,11 @@ from ipyannotations.controls import togglebuttongroup as tbg
 
 from PIL import Image
 from matplotlib import pyplot as plt
+from utils import geoutils
+from utils import model_utils
+
+from IPython.display import display
+from ipywidgets import Layout, GridspecLayout, Button, Image, Tab
 
 logging.basicConfig(level=logging.INFO)
 
@@ -21,8 +30,12 @@ class DataAnnotator:
         self, 
         path_to_images: str, 
         path_to_file: str, 
+        path_to_embeddings: str,
         labels: dict,
-        index: int = 0
+        embeds_dir: str = None,
+        index: int = 0,
+        filename: str = None,
+        mode: str = "aerial",
     ):
         """
         Initializes the annotation tool.
@@ -37,13 +50,23 @@ class DataAnnotator:
         self.path_to_file = path_to_file
         self.labels = labels
         self.index = index
+        self.mode = mode
 
         self.total_annotations = 0
         self.start_time = self.begin_timer()
 
-        self.data = self.load_data()
-        self.widget = self.show_annotator()
+        self.embeddings = None
+        self.path_to_embeddings = path_to_embeddings
 
+        self.data = self.load_data()
+        if "clean" not in self.data.columns:
+            self.data["clean"] = self.data.filepath.apply(lambda x: geoutils.check_quality(x))
+            self.data.to_file(path_to_file)
+            
+        if filename is not None:
+            self.index = self.data[self.data.filename == filename].index[0]
+        self.widget = self.show_annotator()
+            
         
     def begin_timer(self) -> None:
         """Starts the annotation timer."""
@@ -61,12 +84,29 @@ class DataAnnotator:
             logging.info(f"Annotation rate: {annotation_rate:.2f} seconds per annotation")
             
         logging.info(f"Total annotations for this session: {self.total_annotations}")
-
+    
     
     def load_data(self) -> gpd.GeoDataFrame:
         """Loads the geospatial data and attaches full file paths."""
-        data = gpd.read_file(os.path.join(os.getcwd(), self.path_to_file))
-        data["filepath"] = data.filename.apply(lambda x: os.path.join(os.getcwd(), self.path_to_images, x))
+
+        if self.mode == "aerial":
+            data = gpd.read_file(os.path.join(os.getcwd(), self.path_to_file))
+            data["filepath"] = data.filename.apply(lambda x: os.path.join(os.getcwd(), self.path_to_images, x))
+            
+        elif self.mode == "streetview":
+            def process_bbox(item):
+                bbox = item[1:-1].split(",")
+                return (
+                    float(bbox[0]), 
+                    float(bbox[1]), 
+                    float(bbox[2]), 
+                    float(bbox[3])
+                )
+            data = pd.read_csv(self.path_to_file).reset_index(drop=True)
+            data["UID"] = data.index
+            data["filepath"] = data.filename.apply(lambda x: os.path.join(os.getcwd(), self.path_to_images, x))
+            data["bbox"] = data["bbox"].apply(lambda x: process_bbox(x))
+            
         return data
     
     def update_title(self) -> str:
@@ -110,10 +150,18 @@ class DataAnnotator:
                     self.data.loc[self.data.index == self.index, "annotated"] = True
                 self.total_annotations += 1
 
-            drop_columns = ["filepath", "exists"]
-            self.data.drop(columns=[col for col in drop_columns if col in self.data.columns]).to_file(self.path_to_file)
-            
-            self.index += 1
+                drop_columns = ["filepath", "exists"]
+                data = self.data.drop(columns=[col for col in drop_columns if col in self.data.columns])
+                if self.mode == "aerial":
+                    data.to_file(self.path_to_file)
+                elif self.mode == "streetview":
+                    data.to_csv(self.path_to_file)
+
+            while True:
+                self.index += 1
+                if self.data.iloc[self.index].clean == True or self.index > len(self.data):
+                    break
+                    
             self.widget.children[0].value = self.update_title() 
             self.widget.display(self.data.iloc[self.index].filepath)
             
@@ -127,7 +175,7 @@ class DataAnnotator:
 
         Returns:
             MulticlassLabeller: The interactive widget for annotation.
-        """
+        """       
         # Load existing annotations
         if "annotated" not in self.data.columns:
             self.data["annotated"] = False
@@ -172,13 +220,175 @@ class DataAnnotator:
         widget.children[1].layout = layout
         
         return widget
+
+
+    def vector_search(self, query_index: int, n: int = 10, exclude_annotated=False):
+            
+        self.embeddings = model_utils.generate_embedding(
+            data = self.data,
+            image_dir=self.path_to_images,
+            out_dir=self.path_to_embeddings,
+        )   
+
+        query = self.embeddings.iloc[query_index, :-1].to_numpy()
+        query_image = model_utils.load_image(self.data.iloc[query_index].filepath)
+        
+        embeddings = self.embeddings.copy()
+        embeddings["annotated"] = self.data["annotated"]
+        if exclude_annotated:
+            embeddings = embeddings[embeddings.annotated != True]
+        indexes = embeddings.index
+        embeddings_vector = embeddings.iloc[:, :-2].to_numpy()
+        
+        indexes = model_utils.top_n_similarity(query, embeddings_vector, indexes, n=n+1)
+        indexes = [index[0] for index in indexes[1:]]
+        top_n_uids = embeddings.loc[indexes].UID
+
+        data = self.data[self.data.UID.isin(top_n_uids)].reindex(indexes)
+
+        uids = list(data.UID)
+        num_rows, num_cols = int(n/5), 5
+        fig, axes = plt.subplots(num_rows + 1, num_cols, figsize=(12, 12))
+
+        title = f'Query Image \nIndex: {query_index}'
+        for label in self.labels.keys():
+            if label in data.columns:
+                title += f'\n{self.data.iloc[query_index][label]}'
+
+        # Plot the main image
+        axes[0, 2].imshow(query_image)
+        axes[0, 2].axis('off')
+        axes[0, 2].set_title(title)
+        
+        fig.delaxes(axes[0, 0])
+        fig.delaxes(axes[0, 1])
+        fig.delaxes(axes[0, 3])
+        fig.delaxes(axes[0, 4])
+        
+        for i, (uid, index) in enumerate(zip(uids, indexes)):
+            item = data.query(f"UID == {uid}")
+            image = model_utils.load_image(item.filepath.values[0])
+            row = (i // num_cols) + 1
+            col = i % num_cols
+            axes[row, col].imshow(image)
+            axes[row, col].axis('off')
+            title = f'Index {index}'
+            for label in self.labels.keys():
+                if label in data.columns:
+                    title += f'\n{item[label].values[0]}'
+            axes[row, col].set_title(title)
+
+        # Remove any unused subplots
+        for i in range(len(uids), num_rows * num_cols):
+            row = (i // num_cols) + 1
+            col = i % num_cols
+            fig.delaxes(axes[row, col])
+        
+        # Adjust layout and show the plot
+        plt.tight_layout()
+        plt.show()
+
+        return self.validate_data(data.copy(), query_index, n_rows=num_rows, n_cols=num_cols)
+
+
+    def validate_data(self, data, query_index, n_rows, n_cols) -> GridspecLayout:
+        # Create a GridspecLayout for displaying images and buttons
+        row_inc= 3
+        grid = GridspecLayout(n_rows * row_inc + n_rows+1, n_cols)
+    
+        def add_image(item):
+            import cv2
+            from io import BytesIO
+            image = model_utils.load_image(item.filepath)
+            membuf = BytesIO()
+            from PIL import Image
+            Image.fromarray(image).save(membuf, format="png") 
+            
+            from ipywidgets import Image
+            image = Image(
+                value=membuf.getvalue(),
+                format="png",
+                layout=Layout(
+                justify_content="center",
+                border="solid",
+                ),
+                width=250,
+                height=250
+            )
+            return image
+    
+        def on_button_click(button):
+            # Function to handle button click events for validation
+            index = int(button.description.split(" ")[0])
+            item = self.data.iloc[index]
+    
+            change_value = True
+            selected = "Selected"
+            button_style = "warning"      
+            
+            if item["annotated"] == True:
+                selected = "Unselected"
+                change_value = False
+                button_style = "primary"  
+                for label in self.labels.keys():
+                    if label in self.data.columns:
+                        self.data.loc[index, label] = None
+            else:
+                for label in self.labels.keys():
+                    if label in self.data.columns:
+                        self.data.loc[index, label] = self.data.iloc[query_index][label]
+                
+                
+            self.data.loc[index, "annotated"] = change_value
+            button.button_style = button_style
+            button.description = f"{index} {selected}"
+            self.data.to_file(self.path_to_file)
+    
+        def create_button(index, item):
+            # Function to create validation buttons
+            val = item["annotated"]
+            selected = "Unselected"
+            if val == True:
+                selected = "Selected"
+                button_style = "warning"
+            else:
+                button_style = "primary"
+            description = f"{index} {selected}"
+    
+            return Button(
+                description=description,
+                button_style=button_style,
+                layout=Layout(
+                    justify_content="center", border="solid", width="auto", height="10"
+                ),
+            )
+    
+        # Populate the grid with images and buttons
+        row_index, col_index = 1, 0
+        for index, item in data.iterrows():
+            grid[row_index : row_index + row_inc, col_index] = add_image(item)
+            button = create_button(index, item)
+            button.on_click(on_button_click)
+            grid[row_index + row_inc, col_index] = button
+    
+            col_index += 1
+            if col_index >= n_cols:
+                row_index += row_inc + 1
+                col_index = 0
+    
+        return grid
+        
         
     def visualize_annotations(
         self,
+        data = None,
         n_rows: int = 5,
         n_cols: int = 5, 
         index: int = 0,
-        query: str = None
+        query: str = None,
+        randomize: bool = False,
+        show_filename: bool = True,
+        show_clean_only: bool = True
     ):
         """
         Displays a grid of annotated images.
@@ -189,12 +399,17 @@ class DataAnnotator:
             index (int): Start index. Default is 0.
             query (str): Optional query filter.
         """
-        data = self.load_data()
-        
+
+        if data is None:
+            data = self.data.copy()
         if query:
             data = data.query(query)
         if index:
             data = data.iloc[index:]
+        if randomize:
+            data = data[data.annotated==True].sample(frac=1.0)
+        if show_clean_only:
+            data = data[data["clean"] == True]  
 
         index = 0
         uids = list(data.UID)
@@ -206,10 +421,14 @@ class DataAnnotator:
                 if index >= len(uids):
                     break
                 item = data.query(f"UID == {uids[index]}")
-                image = Image.open(item.filepath.values[0])
+                image = model_utils.load_image(item.filepath.values[0])
+                
                 axes[i, j].imshow(image) 
-                axes[i, j].axis('off')  # Turn off axis labels and ticks
-                title = item.filename.values[0] + f"\nIndex: {item.index.values[0]}"
+                axes[i, j].axis('off') 
+                if show_filename:
+                    title = item.filename.values[0] + f"\nIndex: {item.index.values[0]}"
+                else:
+                    title = f"Index: {item.index.values[0]}"
                 for label in self.labels.keys():
                     if label in data.columns:
                         title += f'\n{item[label].values[0]}'

@@ -17,6 +17,7 @@ import rasterio.mask
 import matplotlib.pyplot as plt
 from shapely.geometry import Polygon
 from utils import download_utils
+from utils import geoutils
 
 logging.basicConfig(level=logging.INFO)
 
@@ -39,7 +40,8 @@ class DataSampler:
         min_area: float = 25,
         crs: str = "EPSG:4326",
         country: str = None,
-        region: str = None
+        region: str = None,
+        version: int = 1
     ):
         """
         Initializes the DataSampler object and prepares the sampling grid, building samples, and raster tiles.
@@ -64,6 +66,7 @@ class DataSampler:
         self.region = region
         self.min_area = min_area
         self.crs = crs
+        self.version = version
         
         self.vector_dir = os.path.join(os.getcwd(), vector_dir, iso_code)
         os.makedirs(self.vector_dir, exist_ok=True)
@@ -74,6 +77,7 @@ class DataSampler:
         self.bldgs = self.load_bldgs(bldgs_file, bldgs_src, country)
         self.grid = self.generate_grid(grid_length, grid_width)
         self.grid_samples = self.sample_grids(self.grid, n_samples, rurban_ratio)
+        
         self.bldgs_samples = gpd.sjoin(self.bldgs, self.grid_samples[["geometry", "grid_id"]], predicate="intersects")
         self.bldgs_samples = self.bldgs_samples.drop(['index_right'], axis=1)
         self.bldgs_samples = self.bldgs_samples.drop_duplicates("geometry")
@@ -114,8 +118,9 @@ class DataSampler:
             grouped = df.groupby(group_column)
             group_keys = df[group_column].unique()
             random.shuffle(group_keys)
-        
-            shuffled_df = gpd.GeoDataFrame(pd.concat([grouped.get_group(key) for key in group_keys]), geometry="geometry")
+
+            shuffled_df = pd.concat([grouped.get_group(key) for key in group_keys])
+            shuffled_df = gpd.GeoDataFrame(shuffled_df, geometry="geometry")
             shuffled_df = shuffled_df.reset_index(drop=True)
             return shuffled_df
             
@@ -132,14 +137,19 @@ class DataSampler:
             exist = True
             if not os.path.exists(out_file):
                 try:
-                    self.crop_tile(bldgs_samples[bldgs_samples.UID == bldg.UID].copy(), scale, in_file, out_file)
+                    geoutils.crop_tile(
+                        bldgs_samples[bldgs_samples.UID == bldg.UID].copy(), 
+                        scale, 
+                        in_file, 
+                        out_file
+                    )
                 except Exception as e: 
                     exist = False
                     pass
             exists.append(exist)    
         logging.info(f"Building tiles saved to {out_dir}.")
 
-        out_file = os.path.join(os.getcwd(), self.vector_dir, f"tiles_{self.iso_code}.geojson")
+        out_file = os.path.join(os.getcwd(), self.vector_dir, f"tiles{self.version}_{self.iso_code}.geojson")
         if not os.path.exists(out_file):
             bldgs_samples["filename"] = filenames
             bldgs_samples["exists"] = exists
@@ -149,44 +159,21 @@ class DataSampler:
             logging.info(f"Building sample geojson saved to {out_file}.")
 
         bldgs_samples = gpd.read_file(out_file)
-        return bldgs_samples
-                    
-
-    def crop_tile(self, shape, scale, in_file, out_file):  
-        """
-        Crops the aerial image using a scaled minimum rotated rectangle of the input shape.
-
-        Args:
-            shape (GeoDataFrame): Geometry to crop around.
-            scale (float): Scale factor for expanding the shape.
-            in_file (str): Input raster file path.
-            out_file (str): Output raster file path.
-
-        Returns:
-            None
-        """
         
-        shape.geometry = shape.geometry.apply(lambda x: x.minimum_rotated_rectangle)
-        shape.geometry = shape.geometry.scale(scale, scale)
-    
-        with rio.open(in_file) as src:
-            shape = shape.to_crs(src.crs)
-            out_image, out_transform = rasterio.mask.mask(
-                src, [shape.iloc[0].geometry], crop=True
-            )
-            out_meta = src.meta
-            out_meta.update(
-                {
-                    "driver": "GTiff",
-                    "height": out_image.shape[1],
-                    "width": out_image.shape[2],
-                    "transform": out_transform,
-                    "nodata": 0
-                }
-            )
-        with rio.open(out_file, "w", **out_meta) as dest:
-            dest.write(out_image)
-    
+        out_file = os.path.join(os.getcwd(), self.vector_dir, f"tiles_{self.iso_code}.geojson")
+        if not os.path.exists(out_file):
+            all_buildings = bldgs_samples
+            if self.version > 1:
+                all_buildings = []
+                for i in range(1, self.version+1):
+                    temp = gpd.read_file(os.path.join(self.vector_dir, f"tiles{i}_{self.iso_code}.geojson"))
+                    all_buildings.append(temp)
+                all_buildings = gpd.GeoDataFrame(pd.concat(all_buildings), geometry="geometry").reset_index(drop=True)
+                all_buildings["annotated"] = all_buildings["annotated"].astype('boolean')
+            all_buildings.to_file(out_file, driver="GeoJSON")
+
+        return bldgs_samples
+                        
 
     def sample_grids(self, grid: gpd.GeoDataFrame, n_samples: int = 100, rurban_ratio: float = 1.5):
         """
@@ -202,10 +189,17 @@ class DataSampler:
         """
         n_samples = min(n_samples, len(self.grid))
         logging.info(f"Sampling {n_samples} grid tiles for {self.iso_code}...")
-        out_file = os.path.join(self.vector_dir, f"ann_grid_{self.iso_code}.geojson")
+        out_file = os.path.join(self.vector_dir, f"ann{self.version}_grid_{self.iso_code}.geojson")
         if os.path.exists(out_file):
             logging.info(f"Reading grid sample file: {out_file}")
             return gpd.read_file(out_file)
+
+        if self.version > 1:
+            existing_grids = []
+            for i in range(1, self.version):
+                temp = gpd.read_file(os.path.join(self.vector_dir, f"ann{i}_grid_{self.iso_code}.geojson"))
+                existing_grids.extend(temp.grid_id.unique())
+            grid = grid[~grid.grid_id.isin(existing_grids)]
         
         urban = grid[grid["rurban"] == "urban"]
         rural = grid[grid["rurban"] == "rural"]
