@@ -28,10 +28,10 @@ logging.basicConfig(level=logging.INFO)
 class DataAnnotator:
     def __init__(
         self, 
+        labels: dict,
         path_to_images: str, 
         path_to_file: str, 
-        path_to_embeddings: str,
-        labels: dict,
+        path_to_embeddings: str = None,
         embeds_dir: str = None,
         index: int = 0,
         filename: str = None,
@@ -59,9 +59,6 @@ class DataAnnotator:
         self.path_to_embeddings = path_to_embeddings
 
         self.data = self.load_data()
-        if "clean" not in self.data.columns:
-            self.data["clean"] = self.data.filepath.apply(lambda x: geoutils.check_quality(x))
-            self.data.to_file(path_to_file)
             
         if filename is not None:
             self.index = self.data[self.data.filename == filename].index[0]
@@ -106,6 +103,13 @@ class DataAnnotator:
             data["UID"] = data.index
             data["filepath"] = data.filename.apply(lambda x: os.path.join(os.getcwd(), self.path_to_images, x))
             data["bbox"] = data["bbox"].apply(lambda x: process_bbox(x))
+
+        if "clean" not in data.columns:
+            data["clean"] = data.filepath.apply(lambda x: geoutils.check_quality(x))
+            if self.mode == "aerial":
+                data.to_file(self.path_to_file)
+            else:
+                data.to_csv(self.path_to_file)
             
         return data
     
@@ -222,12 +226,17 @@ class DataAnnotator:
         return widget
 
 
-    def vector_search(self, query_index: int, n: int = 10, exclude_annotated=False):
-            
+    def vector_search(
+        self, 
+        query_index: int = 0, 
+        n: int = 10, 
+        model_name: str = "FMOW_RGB_GASSL"
+    ):
         self.embeddings = model_utils.generate_embedding(
-            data = self.data,
+            data=self.data,
             image_dir=self.path_to_images,
             out_dir=self.path_to_embeddings,
+            model_name=model_name
         )   
 
         query = self.embeddings.iloc[query_index, :-1].to_numpy()
@@ -235,8 +244,6 @@ class DataAnnotator:
         
         embeddings = self.embeddings.copy()
         embeddings["annotated"] = self.data["annotated"]
-        if exclude_annotated:
-            embeddings = embeddings[embeddings.annotated != True]
         indexes = embeddings.index
         embeddings_vector = embeddings.iloc[:, :-2].to_numpy()
         

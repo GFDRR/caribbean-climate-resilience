@@ -16,9 +16,12 @@ import torchvision.transforms as transforms
 from torchgeo.models import DOFABase16_Weights, dofa_base_patch16_224
 from torchgeo.models import Swin_V2_B_Weights, swin_v2_b
 from torchgeo.models import ResNet50_Weights
+from torchgeo.models import ScaleMAELarge16_Weights, scalemae_large_patch16
 
 import satlaspretrain_models
 
+IMAGENET_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_STD = [0.229, 0.224, 0.225]
 NAIP_MEAN = [123.675, 116.28, 103.53] 
 NAIP_STD = [58.395, 57.12, 57.375] 
 NAIP_WAVELENGTHS = [0.665, 0.56, 0.49]
@@ -68,18 +71,27 @@ def load_model_transform(model_name: str, image_size=224):
             transforms.CenterCrop(image_size)
         ])
 
-    elif model_name == "FMOW_RGB_GASSL":
+    elif model_name == "ResNet50_FMOW_RGB_GASSL":
         weights = ResNet50_Weights.FMOW_RGB_GASSL
-        in_chans = weights.meta['in_chans']
         model = timm.create_model('resnet50')
         model.load_state_dict(weights.get_state_dict(progress=True), strict=False)
         transform = transforms.Compose([
             transforms.ToTensor(), 
             transforms.Resize((image_size, image_size)), 
             transforms.CenterCrop(image_size), 
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
         ])
         model = torch.nn.Sequential(*list(model.children())[:-1])
+
+    elif model_name == "ScaleMAE_FMOW_RGB":
+        weights = ScaleMAELarge16_Weights.FMOW_RGB
+        model = scalemae_large_patch16(weights)
+        transform = transforms.Compose([
+            transforms.ToTensor(), 
+            transforms.Resize((image_size, image_size)), 
+            transforms.CenterCrop(image_size), 
+            transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
+        ])
         
     model = model.cuda()
     model.eval()
@@ -107,7 +119,6 @@ def load_image(image_file, padding_color=(0, 0, 0)):
         cv2.BORDER_CONSTANT, 
         value=padding_color
     )
-    #image = image / 255
     return image
 
 
@@ -115,7 +126,7 @@ def generate_embedding(
     data: pd.DataFrame,
     image_dir: str,
     out_dir: str,
-    model_name: str = "FMOW_RGB_GASSL"# "Aerial_SwinB_SI"
+    model_name: str 
 ):
     filename = os.path.join(out_dir, f"{model_name}.csv")
     if os.path.exists(filename):
@@ -133,11 +144,16 @@ def generate_embedding(
             
         if model_name == "vit_base_dofa":
             out_feat = model.forward_features(image.to(torch.float32).cuda(), NAIP_WAVELENGTHS)
+            out_feat = model.forward_head(unpool_features, pre_logits=True)
+        elif model_name == "ScaleMAE_FMOW_RGB":
+            unpool_features = model.forward_features(image.to(torch.float32).cuda())
+            out_feat = model.forward_head(unpool_features, pre_logits=True)
         else:
             out_feat = model(image.to(torch.float32).cuda())
 
         embedding = list(np.array(out_feat[0].cpu().detach().numpy()).reshape(1, -1)[0])
         embeddings.append(embedding)
+        torch.cuda.empty_cache()
 
     embeddings = pd.DataFrame(embeddings, columns = [str(x) for x in range(len(embeddings[0]))]) 
     embeddings["UID"] = data.UID
