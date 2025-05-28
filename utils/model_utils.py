@@ -24,7 +24,7 @@ NAIP_MEAN = [123.675, 116.28, 103.53]
 NAIP_STD = [58.395, 57.12, 57.375] 
 NAIP_WAVELENGTHS = [0.665, 0.56, 0.49]
 
-def top_n_similarity(vector, vector_list, indexes, n=5):
+def top_n_similarity(vector: np.ndarray, vector_list: np.ndarray, indexes: list, n: int = 25):
     """
     Calculate the top-N cosine similarities between a given vector and a list of vectors.
 
@@ -76,7 +76,7 @@ def load_model(model_name: str):
     return model
 
 
-def get_transform(model_name: str, image_size=224):
+def get_transform(model_name: str, image_size: int = 224):
     """
     Return the appropriate image transformation for a given model.
 
@@ -120,7 +120,7 @@ def get_transform(model_name: str, image_size=224):
         ])
         
 
-def load_image(image_file, padding_color=(0, 0, 0)):
+def load_image(image_file: str, padding_color: tuple = (0, 0, 0)):
     """
     Load an image and pad it to make it square.
 
