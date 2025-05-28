@@ -104,6 +104,15 @@ class DataAnnotator:
             data["filepath"] = data.filename.apply(lambda x: os.path.join(os.getcwd(), self.path_to_images, x))
             data["bbox"] = data["bbox"].apply(lambda x: process_bbox(x))
 
+        def is_annotated(x):
+            for label in self.labels:
+                if label in data.columns:
+                    if x[label] is not None:
+                        return True
+            return False
+
+        data["annotated"] = data.apply(lambda x: is_annotated(x), axis=1)                    
+
         if "clean" not in data.columns:
             data["clean"] = data.filepath.apply(lambda x: geoutils.check_quality(x))
             if self.mode == "aerial":
@@ -231,7 +240,7 @@ class DataAnnotator:
         query_index: int = 0, 
         n: int = 10, 
         model_name: str = "FMOW_RGB_GASSL"
-    ):
+    ):            
         self.embeddings = model_utils.generate_embedding(
             data=self.data,
             image_dir=self.path_to_images,
@@ -256,6 +265,7 @@ class DataAnnotator:
         uids = list(data.UID)
         num_rows, num_cols = int(n/5), 5
         fig, axes = plt.subplots(num_rows + 1, num_cols, figsize=(12, 12))
+
 
         title = f'Query Image \nIndex: {query_index}'
         for label in self.labels.keys():
