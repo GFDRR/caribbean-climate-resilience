@@ -4,20 +4,60 @@ import geopandas as gpd
 import rasterio as rio
 import rasterio.mask
 from PIL import Image
-import cv2
+from tqdm import tqdm
+import imagehash
 import torch
+import cv2
 
-def check_quality(filename, threshold=200000):
-    """
-    Detect if an image is blurry using the Laplacian variance method.
+def remove_duplicates(
+    data: pd.DataFrame,
+    hash_size: int = 8,
+    image_dir: str = "data/images/",
+    similarity = 95
+):
+    hashes = []
+    threshold = 1 - similarity/100
+    diff_limit = int(threshold*(hash_size**2))
+    duplicates = []
+
+    duplicates = []
+    for index in tqdm(range(len(data)), total=len(data)):
+        item = data.iloc[index]
+        image = Image.open(item.filepath)
+        temp_hash = imagehash.average_hash(image, hash_size).hash
+
+        found = False
+        for hash_ in hashes:
+            if np.count_nonzero(temp_hash != hash_) <= diff_limit:
+                duplicates.append(item["UID"])
+                found = True
+                break
+            
+        if not found:
+            hashes.append(temp_hash)
+            
+    #data = data[~data.uid.isin(duplicates)]
+    data["duplicate"] = False
+    data.loc[data.UID.isin(duplicates), "duplicate"] = True
+    return data
+
+
+def inspect_quality(filename: str, threshold: float = 200000):
+    """Assesses the sharpness of an image by measuring edge strength in a central region.
+
+    This function opens an image file, resizes it to 500x500 pixels, extracts a 
+    250x250 pixel region centered in the image, converts it to grayscale, and then 
+    applies Canny edge detection. It returns `True` if the sum of detected edge 
+    intensities exceeds a specified threshold, indicating that the image is likely 
+    sharp; otherwise, it returns `False`.
 
     Args:
-        image (numpy.ndarray): The input image.
-        threshold (float): Variance threshold below which the image is considered blurry.
+        filename (str): Path to the image file.
+        threshold (int, optional): Edge intensity threshold to classify an image as 
+            sharp or blurry. Default is 200000.
 
     Returns:
-        bool: True if the image is blurry, False otherwise.
-        float: The variance of the Laplacian.
+        bool: True if the image is considered sharp, False if considered blurry.
     """
     pil_image = Image.open(filename)
 
@@ -47,7 +87,7 @@ def check_quality(filename, threshold=200000):
     
 
 
-def crop_tile(shape, scale, in_file, out_file):  
+def crop_tile(shape: gpd.GeoDataFrame, scale: float, in_file: str, out_file: str):  
     """
     Crops the aerial image using a scaled minimum rotated rectangle of the input shape.
 
@@ -60,8 +100,19 @@ def crop_tile(shape, scale, in_file, out_file):
     Returns:
         None
     """
+
+    from shapely.geometry import Point
+    from math import sqrt
     
-    shape.geometry = shape.geometry.apply(lambda x: x.minimum_rotated_rectangle)
+    def to_square(polygon):
+        minx, miny, maxx, maxy = polygon.bounds
+        centroid = [(maxx+minx)/2, (maxy+miny)/2]
+        diagonal = sqrt((maxx-minx)**2+(maxy-miny)**2)
+        
+        return Point(centroid).buffer(diagonal/sqrt(2.)/2., cap_style=3)
+    
+    #shape.geometry = shape.geometry.apply(lambda x: x.minimum_rotated_rectangle)
+    shape.geometry = shape.geometry.map(to_square)
     shape.geometry = shape.geometry.scale(scale, scale)
 
     with rio.open(in_file) as src:

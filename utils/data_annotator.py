@@ -23,6 +23,9 @@ from utils import model_utils
 from IPython.display import display
 from ipywidgets import Layout, GridspecLayout, Button, Image, Tab
 
+import cv2
+from io import BytesIO
+
 logging.basicConfig(level=logging.INFO)
 
 class DataAnnotator:
@@ -34,7 +37,6 @@ class DataAnnotator:
         path_to_embeddings: str = None,
         embeds_dir: str = None,
         index: int = 0,
-        filename: str = None,
         mode: str = "aerial",
     ):
         """
@@ -46,22 +48,19 @@ class DataAnnotator:
             labels (dict): Dictionary of {label_category: [class1, class2, ...]}.
             index (int): Index to start annotation from. Default is 0.
         """
+        self.path_to_embeddings = path_to_embeddings
         self.path_to_images = path_to_images
         self.path_to_file = path_to_file
+        
         self.labels = labels
         self.index = index
         self.mode = mode
+        self.embeddings = None
 
         self.total_annotations = 0
-        self.start_time = self.begin_timer()
+        self.start_time = self.begin_timer()       
 
-        self.embeddings = None
-        self.path_to_embeddings = path_to_embeddings
-
-        self.data = self.load_data()
-            
-        if filename is not None:
-            self.index = self.data[self.data.filename == filename].index[0]
+        self.data = self.load_data()            
         self.widget = self.show_annotator()
             
         
@@ -81,45 +80,58 @@ class DataAnnotator:
             logging.info(f"Annotation rate: {annotation_rate:.2f} seconds per annotation")
             
         logging.info(f"Total annotations for this session: {self.total_annotations}")
+
+    def _parse_bbox(self, bbox_str: str) -> tuple:
+        """Converts a bbox string to a tuple of floats."""
+        return tuple(map(float, bbox_str.strip("()[]").split(",")))
+
+    
+    def _is_annotated(self, row) -> bool:
+        """Checks if the row has any annotation."""
+        return any(
+            label in row and pd.notnull(row[label])
+            for label in self.labels
+            if label in row.index
+        )
     
     
     def load_data(self) -> gpd.GeoDataFrame:
         """Loads the geospatial data and attaches full file paths."""
+        cwd = os.getcwd()
+        file_path = os.path.join(cwd, self.path_to_file)
+        image_dir = os.path.join(cwd, self.path_to_images)
 
         if self.mode == "aerial":
-            data = gpd.read_file(os.path.join(os.getcwd(), self.path_to_file))
-            data["filepath"] = data.filename.apply(lambda x: os.path.join(os.getcwd(), self.path_to_images, x))
-            
+            data = gpd.read_file(file_path)
         elif self.mode == "streetview":
-            def process_bbox(item):
-                bbox = item[1:-1].split(",")
-                return (
-                    float(bbox[0]), 
-                    float(bbox[1]), 
-                    float(bbox[2]), 
-                    float(bbox[3])
-                )
-            data = pd.read_csv(self.path_to_file).reset_index(drop=True)
+            data = pd.read_csv(file_path).reset_index(drop=True)
             data["UID"] = data.index
-            data["filepath"] = data.filename.apply(lambda x: os.path.join(os.getcwd(), self.path_to_images, x))
-            data["bbox"] = data["bbox"].apply(lambda x: process_bbox(x))
+            data["bbox"] = data["bbox"].apply(self._parse_bbox)
+        else:
+            raise ValueError(f"Unsupported mode: {self.mode}")
 
-        def is_annotated(x):
-            for label in self.labels:
-                if label in data.columns:
-                    if x[label] is not None:
-                        return True
-            return False
+        data["filepath"] = data["filename"].apply(lambda x: os.path.join(image_dir, x))
 
-        data["annotated"] = data.apply(lambda x: is_annotated(x), axis=1)                    
-
+        if "annotated" not in data.columns:
+            data["annotated"] = data.apply(self._is_annotated, axis=1)
+            modified = True
+        else:
+            modified = False
+    
         if "clean" not in data.columns:
-            data["clean"] = data.filepath.apply(lambda x: geoutils.check_quality(x))
+            data["clean"] = data["filepath"].apply(geoutils.inspect_quality)
+            modified = True
+    
+        if "duplicate" not in data.columns:
+            data = geoutils.remove_duplicates(data, image_dir=self.path_to_images, similarity=100)
+            modified = True
+        
+        if modified:
             if self.mode == "aerial":
                 data.to_file(self.path_to_file)
             else:
-                data.to_csv(self.path_to_file)
-            
+                data.to_csv(self.path_to_file, index=False)
+                
         return data
     
     def update_title(self) -> str:
@@ -170,10 +182,13 @@ class DataAnnotator:
                 elif self.mode == "streetview":
                     data.to_csv(self.path_to_file)
 
-            while True:
+            while self.index < len(self.data):
                 self.index += 1
-                if self.data.iloc[self.index].clean == True or self.index > len(self.data):
+                if (self.data.iloc[self.index].clean and not self.data.iloc[self.index].duplicate):
                     break
+            else:
+                logging.info("Reached end of data.")
+                return
                     
             self.widget.children[0].value = self.update_title() 
             self.widget.display(self.data.iloc[self.index].filepath)
@@ -189,10 +204,7 @@ class DataAnnotator:
         Returns:
             MulticlassLabeller: The interactive widget for annotation.
         """       
-        # Load existing annotations
-        if "annotated" not in self.data.columns:
-            self.data["annotated"] = False
-    
+        # Load existing annotations    
         all_categories = [cat for group in self.labels.values() for cat in group]
         label_keys = list(self.labels.keys())
         first_label = label_keys[0]
@@ -239,9 +251,10 @@ class DataAnnotator:
         self, 
         query_index: int = 0, 
         n: int = 10, 
-        model_name: str = "FMOW_RGB_GASSL"
+        model_name: str = "FMOW_RGB_GASSL",
+        exclude_annotated: bool = True
     ):            
-        self.embeddings = model_utils.generate_embedding(
+        self.embeddings = model_utils.generate_embeddings(
             data=self.data,
             image_dir=self.path_to_images,
             out_dir=self.path_to_embeddings,
@@ -252,9 +265,17 @@ class DataAnnotator:
         query_image = model_utils.load_image(self.data.iloc[query_index].filepath)
         
         embeddings = self.embeddings.copy()
-        embeddings["annotated"] = self.data["annotated"]
+        valid_uids = list(self.data.UID.unique())
+        if exclude_annotated:
+            valid_uids = list(self.data[
+                (self.data.clean == True)
+                & (self.data.annotated == False) 
+                & (self.data.duplicate == False)
+            ].UID.unique())
+        
+        embeddings = embeddings[embeddings.UID.isin(valid_uids)]
         indexes = embeddings.index
-        embeddings_vector = embeddings.iloc[:, :-2].to_numpy()
+        embeddings_vector = embeddings.iloc[:, :-1].to_numpy()
         
         indexes = model_utils.top_n_similarity(query, embeddings_vector, indexes, n=n+1)
         indexes = [index[0] for index in indexes[1:]]
@@ -263,49 +284,22 @@ class DataAnnotator:
         data = self.data[self.data.UID.isin(top_n_uids)].reindex(indexes)
 
         uids = list(data.UID)
-        num_rows, num_cols = int(n/5), 5
-        fig, axes = plt.subplots(num_rows + 1, num_cols, figsize=(12, 12))
-
-
+        fig, ax = plt.subplots(1, 1, figsize=(3, 3))
+        
         title = f'Query Image \nIndex: {query_index}'
         for label in self.labels.keys():
             if label in data.columns:
                 title += f'\n{self.data.iloc[query_index][label]}'
 
         # Plot the main image
-        axes[0, 2].imshow(query_image)
-        axes[0, 2].axis('off')
-        axes[0, 2].set_title(title)
-        
-        fig.delaxes(axes[0, 0])
-        fig.delaxes(axes[0, 1])
-        fig.delaxes(axes[0, 3])
-        fig.delaxes(axes[0, 4])
-        
-        for i, (uid, index) in enumerate(zip(uids, indexes)):
-            item = data.query(f"UID == {uid}")
-            image = model_utils.load_image(item.filepath.values[0])
-            row = (i // num_cols) + 1
-            col = i % num_cols
-            axes[row, col].imshow(image)
-            axes[row, col].axis('off')
-            title = f'Index {index}'
-            for label in self.labels.keys():
-                if label in data.columns:
-                    title += f'\n{item[label].values[0]}'
-            axes[row, col].set_title(title)
-
-        # Remove any unused subplots
-        for i in range(len(uids), num_rows * num_cols):
-            row = (i // num_cols) + 1
-            col = i % num_cols
-            fig.delaxes(axes[row, col])
+        ax.imshow(query_image)
+        ax.axis('off')
+        ax.set_title(title)
         
         # Adjust layout and show the plot
         plt.tight_layout()
         plt.show()
-
-        return self.validate_data(data.copy(), query_index, n_rows=num_rows, n_cols=num_cols)
+        return self.validate_data(data.copy(), query_index, n_rows=int(n/5), n_cols=5)
 
 
     def validate_data(self, data, query_index, n_rows, n_cols) -> GridspecLayout:
@@ -314,8 +308,6 @@ class DataAnnotator:
         grid = GridspecLayout(n_rows * row_inc + n_rows+1, n_cols)
     
         def add_image(item):
-            import cv2
-            from io import BytesIO
             image = model_utils.load_image(item.filepath)
             membuf = BytesIO()
             from PIL import Image
@@ -357,9 +349,10 @@ class DataAnnotator:
                 
                 
             self.data.loc[index, "annotated"] = change_value
+            self.data.to_file(self.path_to_file)
+            
             button.button_style = button_style
             button.description = f"{index} {selected}"
-            self.data.to_file(self.path_to_file)
     
         def create_button(index, item):
             # Function to create validation buttons
@@ -398,7 +391,6 @@ class DataAnnotator:
         
     def visualize_annotations(
         self,
-        data = None,
         n_rows: int = 5,
         n_cols: int = 5, 
         index: int = 0,
@@ -417,8 +409,7 @@ class DataAnnotator:
             query (str): Optional query filter.
         """
 
-        if data is None:
-            data = self.data.copy()
+        data = self.data.copy()
         if query:
             data = data.query(query)
         if index:
@@ -427,6 +418,7 @@ class DataAnnotator:
             data = data[data.annotated==True].sample(frac=1.0)
         if show_clean_only:
             data = data[data["clean"] == True]  
+            data = data[data["duplicate"] == False]  
 
         index = 0
         uids = list(data.UID)
@@ -458,13 +450,3 @@ class DataAnnotator:
         
         # Show the plot
         plt.show()
-
-
-
-
-
-
-
-
-
-
