@@ -2,6 +2,7 @@ import os
 import time
 import logging
 import datetime
+import shutil
 from io import BytesIO
 
 import cv2
@@ -50,21 +51,24 @@ class DataAnnotator:
             index (int, optional): Starting index for annotation. Defaults to 0.
             mode (str, optional): Mode of operation, either 'aerial' or 'streetview'. Defaults to "aerial".
         """
+        # Initialize variables
+        self.path_to_embeddings = path_to_embeddings
+        self.path_to_images = path_to_images
+        self.path_to_file = path_to_file
+        self.labels = labels
+        self.index = index
+        self.mode = mode
+        self.embeddings = None
 
-        self.path_to_embeddings = path_to_embeddings # Path to store or load embeddings
-        self.path_to_images = path_to_images # Directory of images
-        self.path_to_file = path_to_file # Metadata file path
+        # Initialize tracking variables
+        self.total_annotations = 0
+        self.start_time = self.begin_timer()
         
-        self.labels = labels # Annotation labels dictionary
-        self.index = index # Current image index for annotation
-        self.mode = mode # Mode of annotation ('aerial' or 'streetview')
-        self.embeddings = None # Placeholder for embeddings DataFrame
+        # Load data with verification
+        self.data = self.load_data()   
 
-        self.total_annotations = 0 # Counter for how many annotations done in session
-        self.start_time = self.begin_timer() # Start timing annotation session       
-
-        self.data = self.load_data() # Load metadata and image file paths            
-        self.widget = self.show_annotator() # Build and display the annotation UI widget
+        # Build UI
+        self.widget = self.show_annotator() 
             
         
     def begin_timer(self) -> float:
@@ -124,6 +128,44 @@ class DataAnnotator:
             for label in self.labels
             if label in row.index
         )
+
+    def save_data(self) -> bool:
+        """Safely saves data with verification."""
+        try:
+            # Create backup
+            backup_path = f"{self.path_to_file}.bak"
+            if os.path.exists(self.path_to_file):
+                shutil.copy2(self.path_to_file, backup_path)
+            
+            # Prepare data for saving
+            save_data = self.data.copy()
+            if "filepath" in save_data.columns:
+                save_data = save_data.drop(columns=["filepath"])
+            
+            # Save based on mode
+            if self.mode == "aerial":
+                save_data.to_file(self.path_to_file, driver='GeoJSON')
+            else:
+                save_data.to_csv(self.path_to_file, index=False)
+            
+            # Verify save by reading back
+            if self.mode == "aerial":
+                test_data = gpd.read_file(self.path_to_file)
+            else:
+                pd.read_csv(self.path_to_file)
+                
+            if len(test_data) != len(self.data):
+                raise ValueError("Saved data length mismatch")
+                
+            logging.info(f"Saved {len(test_data)} records")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Save failed: {str(e)}")
+            # Restore from backup if available
+            if os.path.exists(backup_path):
+                shutil.move(backup_path, self.path_to_file)
+            return False
     
     
     def load_data(self) -> gpd.GeoDataFrame:
@@ -139,40 +181,39 @@ class DataAnnotator:
 
         # Load data differently based on mode
         if self.mode == "aerial":
-            data = gpd.read_file(file_path) # Read geospatial data (shapefile/GeoJSON)
+            data = gpd.read_file(file_path) 
         elif self.mode == "streetview":
-            data = pd.read_csv(file_path) # Read CSV file
-            data["UID"] = data.index # Assign unique IDs based on index
-            data["bbox"] = data["bbox"].apply(self._parse_bbox) # Parse bbox strings to tuples
+            data = pd.read_csv(file_path) 
+            data["bbox"] = data["bbox"].apply(self._parse_bbox) 
         else:
             raise ValueError(f"Unsupported mode: {self.mode}")
 
+        # Initialize required columns
+        if "UID" not in data.columns:
+            data["UID"] = data.index
+
         # Attach full file path to each image filename
-        data["filepath"] = data["filename"].apply(lambda x: os.path.join(image_dir, x))
+        if "filepath" not in data.columns:
+            data["filepath"] = data["filename"].apply(
+                lambda x: os.path.join(self.path_to_images, x)
+            )
 
-        # Check if 'annotated' column exists, else create it by checking annotations
-        if "annotated" not in data.columns:
-            data["annotated"] = data.apply(self._is_annotated, axis=1)
-            modified = True
-        else:
-            modified = False
-
-        # Check if 'clean' column exists; if not, inspect image quality and add it
-        if "clean" not in data.columns:
-            data["clean"] = data["filepath"].apply(geoutils.inspect_quality)
-            modified = True
-
-        # Check for duplicates if 'duplicate' column not present, then mark duplicates
-        if "duplicate" not in data.columns:
-            data = geoutils.remove_duplicates(data, image_dir=self.path_to_images, similarity=100)
-            modified = True
-
-        # Save modified data back to file
-        if modified:
-            if self.mode == "aerial":
-                data.to_file(self.path_to_file) # Save geospatial file
-            else:
-                data.to_csv(self.path_to_file, index=False) # Save CSV
+        # Initialize special columns if missing
+        cols_to_add = {
+             "annotated": lambda d: d.apply(self._is_annotated, axis=1),
+            "clean": lambda d: d["filepath"].apply(geoutils.inspect_quality),
+            "duplicate": lambda d: pd.Series(False, index=d.index)
+        }
+            
+        modified = False
+        for col, init_func in cols_to_add.items():
+            if col not in data.columns:
+                data[col] = init_func(data)
+                modified = True
+            
+        # Save if we modified the structure
+        if modified and not self.save_data():
+            raise RuntimeError("Failed to save initialized data")
                 
         return data # Return loaded and processed data
 
@@ -185,7 +226,9 @@ class DataAnnotator:
             str: HTML string for the title.
         """
         row = self.data.iloc[self.index] # Current row
-        title = f'<h2 style="text-align:center;">{row.filename} <br> Index: {self.index}</h2>' # Main title with filename
+
+        # Main title with filename
+        title = f'<h2 style="text-align:center;">{row.filename} <br> Index: {self.index}</h2>'
         title = title + '<h3 style="text-align:center;">' # Subtitle with labels
 
         # Iterate through labels in reverse order to add label: value pairs if present
@@ -193,8 +236,9 @@ class DataAnnotator:
             if label in self.data.columns:
                 value = self.data.iloc[self.index][label]
                 if value is not None:
-                    # Format label and value nicely for display
-                    title += f"{label.replace('_', ' ').title()}: {value.replace('_', ' ').title()}<br>"
+                    label = label.replace('_', ' ').title()
+                    value = value.replace('_', ' ').title()
+                    title += f"{label}: {value}<br>"
         title += "</h3>"
         return title
 
@@ -212,6 +256,26 @@ class DataAnnotator:
         self.widget.display(self.data.iloc[self.index].filepath) # Display previous image
 
 
+    def _move_to_next_valid(self) -> bool:
+        """Moves to next valid image, returns True if successful."""
+        remaining = self.data[
+            (self.data.index > self.index) &
+            (self.data.clean) &
+            (~self.data.duplicate)
+        ]
+        
+        if not remaining.empty:
+            self.index = remaining.index[0]
+            return True
+        return False
+
+
+    def _update_display(self) -> None:
+        """Updates widget display with current image."""
+        self.widget.children[0].value = self.update_title()
+        self.widget.display(self.data.iloc[self.index].filepath)
+
+
     def store_annotations(self, annotations: list) -> None:
         """
         Stores submitted annotations and moves to the next image.
@@ -219,50 +283,28 @@ class DataAnnotator:
         Args:
             annotations (list): List of annotations corresponding to labels.
         """
-        try:
-            if annotations:
-                # Check if all categories have labels annotated
-                if len(annotations) < len(self.labels.keys()):
-                    raise ValueError(f"Please add a label for each category.")
-                    return
+        if annotations:
+            # Check if all categories have labels annotated
+            if len(annotations) != len(self.labels):
+                raise ValueError("Please provide all required annotations")
 
-                # Validate each annotation against allowed categories and store it
-                for label, ann in zip(self.labels, annotations):
-                    if ann not in self.labels[label]:
-                        raise ValueError(f"Invalid category '{ann}' for label '{label}'.")
-                        return 
-                        
-                    self.data.loc[self.data.index == self.index, label] = ann
-                    self.data.loc[self.data.index == self.index, "annotated"] = True
-                    
-                self.total_annotations += 1 # Increment annotation counter
+            # Validate each annotation against allowed categories and store it
+            for label, ann in zip(self.labels, annotations):
+                if ann not in self.labels[label]:
+                    raise ValueError(f"Invalid value '{ann}' for label '{label}'")
+                
+                self.data.at[self.index, label] = ann
+                self.data.at[self.index, "annotated"] = True
 
-                # Drop non-essential columns before saving
-                drop_columns = ["filepath", "exists"]
-                data = self.data.drop(columns=[col for col in drop_columns if col in self.data.columns])
+            # Save and verify
+            if not self.save_data():
+                raise RuntimeError("Failed to save annotations")
+            self.total_annotations += 1 
 
-                # Save back to original file (shapefile or CSV)
-                if self.mode == "aerial":
-                    data.to_file(self.path_to_file)
-                elif self.mode == "streetview":
-                    data.to_csv(self.path_to_file)
-
-            # Move to next image index if not at the end
-            while self.index < len(self.data):
-                self.index += 1
-                if (self.data.iloc[self.index].clean and not self.data.iloc[self.index].duplicate):
-                    break
-            else:
-                logging.info("Reached end of data.")
-                return
-
-            # Update title to new image
-            self.widget.children[0].value = self.update_title() 
-            # Update displayed image
-            self.widget.display(self.data.iloc[self.index].filepath)
-            
-        except IndexError:
-            logging.info("Reached end of data.")
+        if self._move_to_next_valid():
+            self._update_display()
+        else:
+            logging.info("Reached end of dataset")
 
         
     def show_annotator(self) -> MulticlassLabeller:
@@ -314,6 +356,78 @@ class DataAnnotator:
         widget.children[1].layout = layout
         
         return widget
+
+
+    def visualize_annotations(
+        self,
+        n_rows: int = 5,
+        n_cols: int = 5, 
+        index: int = 0,
+        query: str = None,
+        randomize: bool = False,
+        show_filename: bool = True,
+        show_clean_only: bool = True
+    ):
+        """
+        Displays a grid of annotated images with optional filtering and labeling.
+    
+        Shows images in a matplotlib subplot grid with titles that can include filenames,
+        indices, and annotation labels. Allows filtering by query string, randomizing 
+        order, and showing only clean (non-duplicate) items.
+    
+        Args:
+            n_rows (int, optional): Number of rows in the display grid. Defaults to 5.
+            n_cols (int, optional): Number of columns in the display grid. Defaults to 5.
+            index (int, optional): Starting index from which to display images. Defaults to 0.
+            query (str, optional): Query string to filter the data before display. Defaults to None.
+            randomize (bool, optional): If True, randomizes the order of displayed annotated images. Defaults to False.
+            show_filename (bool, optional): Whether to show filenames in the image titles. Defaults to True.
+            show_clean_only (bool, optional): If True, shows only items marked as clean and not duplicates. Defaults to True.
+    
+        Returns:
+            None: Displays a matplotlib figure with the annotated images grid.
+        """
+        data = self.data.copy()
+        if query:
+            data = data.query(query)
+        if index:
+            data = data.iloc[index:]
+        if randomize:
+            data = data[data.annotated==True].sample(frac=1.0)
+        if show_clean_only:
+            data = data[data["clean"] == True]  
+            data = data[data["duplicate"] == False]  
+
+        index = 0
+        uids = list(data.UID)
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(12, 12))
+        
+        # Loop through the rows and columns of the grid
+        for i in range(n_rows):
+            for j in range(n_cols):
+                if index >= len(uids):
+                    break
+                item = data.query(f"UID == {uids[index]}")
+                image = model_utils.load_image(item.filepath.values[0])
+                
+                axes[i, j].imshow(image) 
+                axes[i, j].axis('off') 
+                if show_filename:
+                    title = item.filename.values[0] + f"\nIndex: {item.index.values[0]}"
+                else:
+                    title = f"Index: {item.index.values[0]}"
+                for label in self.labels.keys():
+                    if label in data.columns:
+                        title += f'\n{item[label].values[0]}'
+                axes[i, j].set_title(title)
+                index += 1
+        
+        # Adjust spacing between subplots
+        plt.tight_layout()
+        plt.axis('off'),
+        
+        # Show the plot
+        plt.show()
 
 
     def vector_search(
@@ -445,7 +559,9 @@ class DataAnnotator:
                 
                 
             self.data.loc[index, "annotated"] = change_value
-            self.data.to_file(self.path_to_file)
+            # Save and verify
+            if not self.save_data():
+                raise RuntimeError("Failed to save annotations")
             
             button.button_style = button_style
             button.description = f"{index} {selected}"
@@ -484,74 +600,3 @@ class DataAnnotator:
     
         return grid
         
-        
-    def visualize_annotations(
-        self,
-        n_rows: int = 5,
-        n_cols: int = 5, 
-        index: int = 0,
-        query: str = None,
-        randomize: bool = False,
-        show_filename: bool = True,
-        show_clean_only: bool = True
-    ):
-        """
-        Displays a grid of annotated images with optional filtering and labeling.
-    
-        Shows images in a matplotlib subplot grid with titles that can include filenames,
-        indices, and annotation labels. Allows filtering by query string, randomizing 
-        order, and showing only clean (non-duplicate) items.
-    
-        Args:
-            n_rows (int, optional): Number of rows in the display grid. Defaults to 5.
-            n_cols (int, optional): Number of columns in the display grid. Defaults to 5.
-            index (int, optional): Starting index from which to display images. Defaults to 0.
-            query (str, optional): Query string to filter the data before display. Defaults to None.
-            randomize (bool, optional): If True, randomizes the order of displayed annotated images. Defaults to False.
-            show_filename (bool, optional): Whether to show filenames in the image titles. Defaults to True.
-            show_clean_only (bool, optional): If True, shows only items marked as clean and not duplicates. Defaults to True.
-    
-        Returns:
-            None: Displays a matplotlib figure with the annotated images grid.
-        """
-        data = self.data.copy()
-        if query:
-            data = data.query(query)
-        if index:
-            data = data.iloc[index:]
-        if randomize:
-            data = data[data.annotated==True].sample(frac=1.0)
-        if show_clean_only:
-            data = data[data["clean"] == True]  
-            data = data[data["duplicate"] == False]  
-
-        index = 0
-        uids = list(data.UID)
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(12, 12))
-        
-        # Loop through the rows and columns of the grid
-        for i in range(n_rows):
-            for j in range(n_cols):
-                if index >= len(uids):
-                    break
-                item = data.query(f"UID == {uids[index]}")
-                image = model_utils.load_image(item.filepath.values[0])
-                
-                axes[i, j].imshow(image) 
-                axes[i, j].axis('off') 
-                if show_filename:
-                    title = item.filename.values[0] + f"\nIndex: {item.index.values[0]}"
-                else:
-                    title = f"Index: {item.index.values[0]}"
-                for label in self.labels.keys():
-                    if label in data.columns:
-                        title += f'\n{item[label].values[0]}'
-                axes[i, j].set_title(title)
-                index += 1
-        
-        # Adjust spacing between subplots
-        plt.tight_layout()
-        plt.axis('off'),
-        
-        # Show the plot
-        plt.show()
