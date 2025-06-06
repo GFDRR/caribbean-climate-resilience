@@ -8,6 +8,51 @@ import torch.nn as nn
 import torchvision
 import matplotlib.pyplot as plt
 
+import os
+from tqdm import tqdm
+import collections
+import itertools
+import random
+import copy
+
+import json
+import joblib
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from sklearn.preprocessing import (
+    MinMaxScaler,
+    MaxAbsScaler,
+    StandardScaler,
+    RobustScaler,
+)
+
+from sklearn.metrics import (
+    confusion_matrix, 
+    ConfusionMatrixDisplay,
+    classification_report
+)
+
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import (
+    KFold, GroupKFold, GridSearchCV, RandomizedSearchCV, GroupShuffleSplit
+)
+
+import cv2
+import torch
+import rasterio as rio
+import matplotlib.image as mpimg
+import matplotlib.pyplot as plt
+
+from torchvision.transforms import ToPILImage
+from torchvision import transforms
+
+import sys
+sys.path.insert(0, "./utils/")
+import eval_utils
+import clf_utils
+
 from tqdm import tqdm
 from sklearn.metrics.pairwise import cosine_similarity
 import torchvision.transforms as transforms
@@ -23,6 +68,152 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 NAIP_MEAN = [123.675, 116.28, 103.53] 
 NAIP_STD = [58.395, 57.12, 57.375] 
 NAIP_WAVELENGTHS = [0.665, 0.56, 0.49]
+
+SEED = 42
+
+
+def _get_scalers(scalers):
+    """Returns a list of scalers for hyperparameter optimization.
+
+    Args:
+        scalers (list): A list of strings indicating the scalers
+            to include in the hyperparameter search space.
+
+    Returns:
+        list: A list of sclaer instances.
+    """
+
+    scalers_list = [None]
+
+    for scaler in scalers:
+        scalers_list.append(clf_utils.get_scaler(scaler))
+    
+    return scalers_list
+
+
+def _get_pipeline(model, selector):
+    """Instantiates and returns a pipeline based on
+    the input configuration.
+
+    Args:
+        model (object): The model instance to include in the pipeline.
+        selector (object): The selector instance to include in the pipeline.
+
+    Returns:
+        sklearn pipeline instance.
+    """
+
+    if model in clf_utils.MODELS:
+        model = clf_utils.get_model(model)
+
+    if selector in clf_utils.SELECTORS:
+        selector = clf_utils.get_selector(selector)
+
+    return Pipeline(
+        [
+            ("scaler", "passthrough"),
+            ("selector", selector),
+            ("model", model),
+        ]
+    )
+
+
+def _get_params(scalers, model_params, selector_params):
+    """Instantiates the parameter grid for hyperparameter optimization.
+
+    Args:
+        scalers (dict): A dictionary indicating the the list of scalers.
+        model_params (dict): A dictionary containing the model parameters.
+        selector_params (dict): A dictionary containing the feature
+            selector parameters.
+
+    Returns
+        dict: Contains the parameter grid, combined into a single dictionary.
+    """
+
+    def _get_range(param):
+        if param[0] == "np.linspace":
+            return list(np.linspace(*param[1:]).astype(int))
+        elif param[0] == "range":
+            return list(range(*param[1:]))
+        return param
+
+    scalers = {"scaler": _get_scalers(scalers)}
+
+    if model_params:
+        model_params = {
+            "model__" + name: _get_range(param) for name, param in model_params.items()
+        }
+    else:
+        model_params = {}
+
+    if selector_params:
+        selector_params = {
+            "selector__" + name: _get_range(param)
+            for name, param in selector_params.items()
+        }
+    else:
+        selector_params = {}
+
+    params = [model_params, selector_params, scalers]
+
+    return dict(collections.ChainMap(*params))
+
+
+def get_cv(c, cv):
+    """Returns a model selection instance.
+
+    Args:
+        c (dict): The config dictionary indicating the model,
+            selector, scalers, parameters, and model selection
+            instance.
+
+    Returns:
+        object: The model selector instance.
+    """
+
+    pipe = _get_pipeline(c["model"], c["selector"])
+    params = _get_params(c["scalers"], c["model_params"], c["selector_params"])
+    cv_strategy, cv_params = c["cv"], c["cv_params"]
+
+    assert cv_strategy in ["RandomizedSearchCV", "GridSearchCV"]
+
+    scoring = eval_utils.get_scoring()
+    if cv_strategy == "RandomizedSearchCV":
+        return RandomizedSearchCV(
+            pipe, params, scoring=scoring, random_state=SEED, cv=cv, **cv_params
+        )
+    elif cv_strategy == "GridSearchCV":
+        return GridSearchCV(pipe, params, scoring=scoring, cv=cv, **cv_params)
+
+
+def group_kfold(c, X, y, groups, test_size=0.2): 
+    gss = GroupShuffleSplit(test_size=test_size, n_splits=1, random_state=42)
+    split = gss.split(X, y, groups=groups)
+    train_index, test_index = next(split)
+    
+    X_train, X_test, = X.loc[train_index], X.loc[test_index]
+    y_train, y_test = y[train_index], y[test_index]
+    group_train, group_test = groups[train_index], groups[test_index]
+    
+    cv = get_cv(c, GroupKFold(c['n_splits']))
+    cv.fit(X_train, y_train, groups=group_train)
+     
+    cv_results = pd.DataFrame.from_dict(cv.cv_results_)
+    cv_results = cv_results.sort_values("mean_test_f1_score", ascending=False)
+    
+    y_pred = cv.best_estimator_.predict(X_test)
+    result = eval_utils.evaluate(y_test, y_pred)
+    report = classification_report(y_test, y_pred, zero_division=0, output_dict=True)
+    report = pd.DataFrame(report).transpose()
+    
+    labels = list(y_test.unique())
+    cm = confusion_matrix(y_test, y_pred, labels=labels)
+    cm = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
+    preds = pd.DataFrame.from_dict({"y_pred": y_pred, "y_test": y_test})
+    
+    return cv, result, report, cm, preds
+
 
 def top_n_similarity(vector: np.ndarray, vector_list: np.ndarray, indexes: list, n: int = 25):
     """
