@@ -40,8 +40,7 @@ class DataSampler:
         min_area: float = 25,
         crs: str = "EPSG:4326",
         country: str = None,
-        region: str = None,
-        version: int = 1
+        region: str = None
     ):
         """
         Initializes the DataSampler object and prepares the sampling grid, building samples, and raster tiles.
@@ -66,7 +65,6 @@ class DataSampler:
         self.region = region
         self.min_area = min_area
         self.crs = crs
-        self.version = version
         
         self.vector_dir = os.path.join(os.getcwd(), vector_dir, iso_code)
         os.makedirs(self.vector_dir, exist_ok=True)
@@ -124,7 +122,7 @@ class DataSampler:
             shuffled_df = shuffled_df.reset_index(drop=True)
             return shuffled_df
             
-        out_dir = os.path.join(os.getcwd(), self.raster_dir, self.iso_code, f"tiles_{self.iso_code}")
+        out_dir = os.path.join(os.getcwd(), self.raster_dir, self.iso_code, "tiles")
         os.makedirs(out_dir, exist_ok=True)
 
         total = len(bldgs_samples)
@@ -149,7 +147,7 @@ class DataSampler:
             exists.append(exist)    
         logging.info(f"Building tiles saved to {out_dir}.")
 
-        out_file = os.path.join(os.getcwd(), self.vector_dir, f"tiles{self.version}_{self.iso_code}.geojson")
+        out_file = os.path.join(os.getcwd(), self.vector_dir, f"tiles_{self.iso_code}.geojson")
         if not os.path.exists(out_file):
             bldgs_samples["filename"] = filenames
             bldgs_samples["exists"] = exists
@@ -162,15 +160,7 @@ class DataSampler:
         
         out_file = os.path.join(os.getcwd(), self.vector_dir, f"tiles_{self.iso_code}.geojson")
         if not os.path.exists(out_file):
-            all_buildings = bldgs_samples
-            if self.version > 1:
-                all_buildings = []
-                for i in range(1, self.version+1):
-                    temp = gpd.read_file(os.path.join(self.vector_dir, f"tiles{i}_{self.iso_code}.geojson"))
-                    all_buildings.append(temp)
-                all_buildings = gpd.GeoDataFrame(pd.concat(all_buildings), geometry="geometry").reset_index(drop=True)
-                all_buildings["annotated"] = all_buildings["annotated"].astype('boolean')
-            all_buildings.to_file(out_file, driver="GeoJSON")
+            bldgs_samples.to_file(out_file, driver="GeoJSON")
 
         return bldgs_samples
                         
@@ -189,17 +179,10 @@ class DataSampler:
         """
         n_samples = min(n_samples, len(self.grid))
         logging.info(f"Sampling {n_samples} grid tiles for {self.iso_code}...")
-        out_file = os.path.join(self.vector_dir, f"ann{self.version}_grid_{self.iso_code}.geojson")
+        out_file = os.path.join(self.vector_dir, f"ann_grid_{self.iso_code}.geojson")
         if os.path.exists(out_file):
             logging.info(f"Reading grid sample file: {out_file}")
             return gpd.read_file(out_file)
-
-        if self.version > 1:
-            existing_grids = []
-            for i in range(1, self.version):
-                temp = gpd.read_file(os.path.join(self.vector_dir, f"ann{i}_grid_{self.iso_code}.geojson"))
-                existing_grids.extend(temp.grid_id.unique())
-            grid = grid[~grid.grid_id.isin(existing_grids)]
         
         urban = grid[grid["rurban"] == "urban"]
         rural = grid[grid["rurban"] == "rural"]
