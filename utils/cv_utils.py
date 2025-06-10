@@ -236,9 +236,7 @@ def load_dataset(config: dict, phases: list, verbose: bool = True) -> tuple:
             - classes (list): List of unique class labels.
     """
     # Load the dataset with specified attributes and verbose option
-    dataset = model_utils.load_data(
-        config, attributes=["rurban"], verbose=verbose
-    )
+    dataset = model_utils.load_data(config, attributes=["rurban"], verbose=verbose)
 
     # Generate file paths for the images in the dataset
     dataset["filepath"] = dataset["filepath"] = dataset["filename"].apply(

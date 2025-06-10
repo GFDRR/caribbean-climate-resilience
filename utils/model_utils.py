@@ -30,14 +30,18 @@ from sklearn.preprocessing import (
 )
 
 from sklearn.metrics import (
-    confusion_matrix, 
+    confusion_matrix,
     ConfusionMatrixDisplay,
-    classification_report
+    classification_report,
 )
 
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import (
-    KFold, GroupKFold, GridSearchCV, RandomizedSearchCV, GroupShuffleSplit
+    KFold,
+    GroupKFold,
+    GridSearchCV,
+    RandomizedSearchCV,
+    GroupShuffleSplit,
 )
 
 import cv2
@@ -50,6 +54,7 @@ from torchvision.transforms import ToPILImage
 from torchvision import transforms
 
 import sys
+
 sys.path.insert(0, "./utils/")
 import eval_utils
 import clf_utils
@@ -58,17 +63,20 @@ from tqdm import tqdm
 from sklearn.metrics.pairwise import cosine_similarity
 import torchvision.transforms as transforms
 from torchgeo.models import (
-    DOFABase16_Weights, dofa_base_patch16_224,
-    Swin_V2_B_Weights, swin_v2_b,
+    DOFABase16_Weights,
+    dofa_base_patch16_224,
+    Swin_V2_B_Weights,
+    swin_v2_b,
     ResNet50_Weights,
-    ScaleMAELarge16_Weights, scalemae_large_patch16
+    ScaleMAELarge16_Weights,
+    scalemae_large_patch16,
 )
 
 SEED = 42
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
-NAIP_MEAN = [123.675, 116.28, 103.53] 
-NAIP_STD = [58.395, 57.12, 57.375] 
+NAIP_MEAN = [123.675, 116.28, 103.53]
+NAIP_STD = [58.395, 57.12, 57.375]
 NAIP_WAVELENGTHS = [0.665, 0.56, 0.49]
 
 
@@ -88,7 +96,7 @@ def _get_scalers(scalers):
 
     for scaler in scalers:
         scalers_list.append(clf_utils.get_scaler(scaler))
-    
+
     return scalers_list
 
 
@@ -190,7 +198,7 @@ def get_cv(c, cv):
         return GridSearchCV(pipe, params, scoring=scoring, cv=cv, **cv_params)
 
 
-def group_kfold(c, X, y, groups, test_size=0.2): 
+def group_kfold(c, X, y, groups, test_size=0.2):
     """
     Performs grouped cross-validation with GroupKFold after an initial train-test split using GroupShuffleSplit.
 
@@ -212,31 +220,39 @@ def group_kfold(c, X, y, groups, test_size=0.2):
     gss = GroupShuffleSplit(test_size=test_size, n_splits=1, random_state=42)
     split = gss.split(X, y, groups=groups)
     train_index, test_index = next(split)
-    
-    X_train, X_test, = X.loc[train_index], X.loc[test_index]
+
+    (
+        X_train,
+        X_test,
+    ) = (
+        X.loc[train_index],
+        X.loc[test_index],
+    )
     y_train, y_test = y[train_index], y[test_index]
     group_train, group_test = groups[train_index], groups[test_index]
-    
-    cv = get_cv(c, GroupKFold(c['n_splits']))
+
+    cv = get_cv(c, GroupKFold(c["n_splits"]))
     cv.fit(X_train, y_train, groups=group_train)
-     
+
     cv_results = pd.DataFrame.from_dict(cv.cv_results_)
     cv_results = cv_results.sort_values("mean_test_f1_score", ascending=False)
-    
+
     y_pred = cv.best_estimator_.predict(X_test)
     result = eval_utils.evaluate(y_test, y_pred)
     report = classification_report(y_test, y_pred, zero_division=0, output_dict=True)
     report = pd.DataFrame(report).transpose()
-    
+
     labels = list(y_test.unique())
     cm = confusion_matrix(y_test, y_pred, labels=labels)
     cm = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
     preds = pd.DataFrame.from_dict({"y_pred": y_pred, "y_test": y_test})
-    
+
     return cv, result, report, cm, preds
 
 
-def top_n_similarity(vector: np.ndarray, vector_list: np.ndarray, indexes: list, n: int = 25):
+def top_n_similarity(
+    vector: np.ndarray, vector_list: np.ndarray, indexes: list, n: int = 25
+):
     """
     Calculate the top-N cosine similarities between a given vector and a list of vectors.
 
@@ -247,7 +263,7 @@ def top_n_similarity(vector: np.ndarray, vector_list: np.ndarray, indexes: list,
         n (int, optional): The number of top similar vectors to return. Defaults to 5.
 
     Returns:
-        list: A list of tuples where each tuple contains an index and the corresponding 
+        list: A list of tuples where each tuple contains an index and the corresponding
               cosine similarity score, sorted in descending order of similarity.
     """
     similarity_scores = cosine_similarity([vector], vector_list)[0]
@@ -275,14 +291,14 @@ def load_model(model_name: str):
 
     elif model_name == "ResNet50_FMOW_RGB_GASSL":
         weights = ResNet50_Weights.FMOW_RGB_GASSL
-        model = timm.create_model('resnet50')
+        model = timm.create_model("resnet50")
         model.load_state_dict(weights.get_state_dict(progress=True), strict=False)
         model = torch.nn.Sequential(*list(model.children())[:-1])
 
     elif model_name == "ScaleMAE_FMOW_RGB":
         weights = ScaleMAELarge16_Weights.FMOW_RGB
         model = scalemae_large_patch16(weights)
-        
+
     model = model.cuda()
     model.eval()
     return model
@@ -300,28 +316,34 @@ def get_transform(model_name: str, image_size: int = 224):
         torchvision.transforms.Compose: Composed transformation pipeline.
     """
     if model_name == "vit_base_dofa":
-        return transforms.Compose([
-            transforms.ToTensor(), 
-            transforms.Resize((image_size, image_size)), 
-            transforms.CenterCrop(image_size), 
-            transforms.Normalize(mean=NAIP_MEAN, std=NAIP_STD)
-        ])
+        return transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.Resize((image_size, image_size)),
+                transforms.CenterCrop(image_size),
+                transforms.Normalize(mean=NAIP_MEAN, std=NAIP_STD),
+            ]
+        )
 
     elif model_name == "Aerial_SwinB_SI":
-        return transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Resize((image_size, image_size)), 
-            transforms.CenterCrop(image_size)
-        ])
+        return transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.Resize((image_size, image_size)),
+                transforms.CenterCrop(image_size),
+            ]
+        )
 
     else:
-        return transforms.Compose([
-            transforms.ToTensor(), 
-            transforms.Resize((image_size, image_size)), 
-            transforms.CenterCrop(image_size), 
-            transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
-        ])
-        
+        return transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.Resize((image_size, image_size)),
+                transforms.CenterCrop(image_size),
+                transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            ]
+        )
+
 
 def load_image(image_file: str, padding_color: tuple = (0, 0, 0)):
     """
@@ -338,7 +360,7 @@ def load_image(image_file: str, padding_color: tuple = (0, 0, 0)):
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     height, width, channels = image.shape
     max_size = max(height, width)
-    
+
     pad_top = (max_size - height) // 2
     pad_bottom = max_size - height - pad_top
     pad_left = (max_size - width) // 2
@@ -346,22 +368,19 @@ def load_image(image_file: str, padding_color: tuple = (0, 0, 0)):
 
     # Pad the image
     image = cv2.copyMakeBorder(
-        image, 
-        pad_top, 
-        pad_bottom, 
-        pad_left, 
+        image,
+        pad_top,
+        pad_bottom,
+        pad_left,
         pad_right,
-        cv2.BORDER_CONSTANT, 
-        value=padding_color
+        cv2.BORDER_CONSTANT,
+        value=padding_color,
     )
     return image
 
 
 def generate_embeddings(
-    data: pd.DataFrame,
-    image_dir: str,
-    out_dir: str,
-    model_name: str 
+    data: pd.DataFrame, image_dir: str, out_dir: str, model_name: str
 ):
     """
     Generate and save image embeddings for a dataset.
@@ -380,20 +399,22 @@ def generate_embeddings(
         embeddings = pd.read_csv(filename)
         if len(embeddings) >= len(data):
             return embeddings
-    
+
     model = load_model(model_name)
     transform = get_transform(model_name)
-    
+
     embeddings = []
     data = data.reset_index(drop=True)
     for index in tqdm(range(len(data)), total=len(data)):
         item = data.iloc[index]
         image = load_image(item.filepath)
         image = transform(image)[:3].unsqueeze(0)
-            
+
         if model_name == "vit_base_dofa":
-            out_feat = model.forward_features(image.to(torch.float32).cuda(), NAIP_WAVELENGTHS)
-            out_feat = model.forward_head(unpool_features, pre_logits=True)
+            out_feat = model.forward_features(
+                image.to(torch.float32).cuda(), NAIP_WAVELENGTHS
+            )
+            out_feat = model.forward_head(out_feat, pre_logits=True)
         elif model_name == "ScaleMAE_FMOW_RGB":
             unpool_features = model.forward_features(image.to(torch.float32).cuda())
             out_feat = model.forward_head(unpool_features, pre_logits=True)
@@ -404,10 +425,12 @@ def generate_embeddings(
         embeddings.append(embedding)
         torch.cuda.empty_cache()
 
-    embeddings = pd.DataFrame(embeddings, columns = [str(x) for x in range(len(embeddings[0]))]) 
+    embeddings = pd.DataFrame(
+        embeddings, columns=[str(x) for x in range(len(embeddings[0]))]
+    )
     embeddings["UID"] = data.UID
-    
+
     os.makedirs(out_dir, exist_ok=True)
     embeddings.to_csv(filename, index=False)
-    
+
     return embeddings

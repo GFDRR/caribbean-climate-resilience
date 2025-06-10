@@ -14,13 +14,13 @@ def remove_duplicates(
     data: pd.DataFrame,
     hash_size: int = 8,
     image_dir: str = "data/images/",
-    similarity = 95
+    similarity=95,
 ):
     """
     Detects and flags duplicate images in a DataFrame using perceptual hashing.
 
-    This function computes the average hash of each image and compares it against 
-    previously seen hashes. Images with hash differences below a certain threshold 
+    This function computes the average hash of each image and compares it against
+    previously seen hashes. Images with hash differences below a certain threshold
     are considered duplicates.
 
     Args:
@@ -32,10 +32,10 @@ def remove_duplicates(
     Returns:
         pd.DataFrame: The original DataFrame with an additional boolean column 'duplicate' set to True for detected duplicates.
     """
-    
+
     hashes = []
-    threshold = 1 - similarity/100
-    diff_limit = int(threshold*(hash_size**2))
+    threshold = 1 - similarity / 100
+    diff_limit = int(threshold * (hash_size**2))
     duplicates = []
 
     duplicates = []
@@ -50,11 +50,11 @@ def remove_duplicates(
                 duplicates.append(item["UID"])
                 found = True
                 break
-            
+
         if not found:
             hashes.append(temp_hash)
-            
-    #data = data[~data.uid.isin(duplicates)]
+
+    # data = data[~data.uid.isin(duplicates)]
     data["duplicate"] = False
     data.loc[data.UID.isin(duplicates), "duplicate"] = True
     return data
@@ -63,15 +63,15 @@ def remove_duplicates(
 def inspect_quality(filename: str, threshold: float = 200000):
     """Assesses the sharpness of an image by measuring edge strength in a central region.
 
-    This function opens an image file, resizes it to 500x500 pixels, extracts a 
-    250x250 pixel region centered in the image, converts it to grayscale, and then 
-    applies Canny edge detection. It returns `True` if the sum of detected edge 
-    intensities exceeds a specified threshold, indicating that the image is likely 
+    This function opens an image file, resizes it to 500x500 pixels, extracts a
+    250x250 pixel region centered in the image, converts it to grayscale, and then
+    applies Canny edge detection. It returns `True` if the sum of detected edge
+    intensities exceeds a specified threshold, indicating that the image is likely
     sharp; otherwise, it returns `False`.
 
     Args:
         filename (str): Path to the image file.
-        threshold (int, optional): Edge intensity threshold to classify an image as 
+        threshold (int, optional): Edge intensity threshold to classify an image as
             sharp or blurry. Default is 200000.
 
     Returns:
@@ -82,7 +82,7 @@ def inspect_quality(filename: str, threshold: float = 200000):
     new_size = (500, 500)
     pil_image = pil_image.resize(new_size)
     image = np.array(pil_image)
-    
+
     width, height = pil_image.size
 
     # Define box size
@@ -93,19 +93,18 @@ def inspect_quality(filename: str, threshold: float = 200000):
     y = (height - box_height) // 2
 
     # Extract ROI
-    image = image[y:y+box_height, x:x+box_width]
+    image = image[y : y + box_height, x : x + box_width]
 
     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    edges = cv2.Canny(image, 50, 200, apertureSize=5) 
+    edges = cv2.Canny(image, 50, 200, apertureSize=5)
 
     # Determine if the image is blurry
     return edges.sum() > threshold
-    
 
 
-def crop_tile(shape: gpd.GeoDataFrame, scale: float, in_file: str, out_file: str):  
+def crop_tile(shape: gpd.GeoDataFrame, scale: float, in_file: str, out_file: str):
     """
     Crops the aerial image using a scaled minimum rotated rectangle of the input shape.
 
@@ -121,15 +120,15 @@ def crop_tile(shape: gpd.GeoDataFrame, scale: float, in_file: str, out_file: str
 
     from shapely.geometry import Point
     from math import sqrt
-    
+
     def to_square(polygon):
         minx, miny, maxx, maxy = polygon.bounds
-        centroid = [(maxx+minx)/2, (maxy+miny)/2]
-        diagonal = sqrt((maxx-minx)**2+(maxy-miny)**2)
-        
-        return Point(centroid).buffer(diagonal/sqrt(2.)/2., cap_style=3)
-    
-    #shape.geometry = shape.geometry.apply(lambda x: x.minimum_rotated_rectangle)
+        centroid = [(maxx + minx) / 2, (maxy + miny) / 2]
+        diagonal = sqrt((maxx - minx) ** 2 + (maxy - miny) ** 2)
+
+        return Point(centroid).buffer(diagonal / sqrt(2.0) / 2.0, cap_style=3)
+
+    # shape.geometry = shape.geometry.apply(lambda x: x.minimum_rotated_rectangle)
     shape.geometry = shape.geometry.map(to_square)
     shape.geometry = shape.geometry.scale(scale, scale)
 
@@ -145,7 +144,7 @@ def crop_tile(shape: gpd.GeoDataFrame, scale: float, in_file: str, out_file: str
                 "height": out_image.shape[1],
                 "width": out_image.shape[2],
                 "transform": out_transform,
-                "nodata": 0
+                "nodata": 0,
             }
         )
     with rio.open(out_file, "w", **out_meta) as dest:
