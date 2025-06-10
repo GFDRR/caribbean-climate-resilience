@@ -9,12 +9,30 @@ import imagehash
 import torch
 import cv2
 
+
 def remove_duplicates(
     data: pd.DataFrame,
     hash_size: int = 8,
     image_dir: str = "data/images/",
     similarity = 95
 ):
+    """
+    Detects and flags duplicate images in a DataFrame using perceptual hashing.
+
+    This function computes the average hash of each image and compares it against 
+    previously seen hashes. Images with hash differences below a certain threshold 
+    are considered duplicates.
+
+    Args:
+        data (pd.DataFrame): DataFrame containing image metadata, including a 'filepath' column and a 'UID' column.
+        hash_size (int, optional): Size of the hash; higher values increase precision but also computation time. Default is 8.
+        image_dir (str, optional): Directory where images are stored. (Currently unused in the function.) Default is "data/images/".
+        similarity (int, optional): Similarity threshold (0–100). Higher values mean stricter duplication checks. Default is 95.
+
+    Returns:
+        pd.DataFrame: The original DataFrame with an additional boolean column 'duplicate' set to True for detected duplicates.
+    """
+    
     hashes = []
     threshold = 1 - similarity/100
     diff_limit = int(threshold*(hash_size**2))

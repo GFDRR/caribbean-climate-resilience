@@ -84,6 +84,20 @@ class DataSampler:
 
 
     def plot_samples(self):
+        """
+        Plots the grid and sampled grid cells using Matplotlib.
+    
+        This method creates a matplotlib figure and plots two layers:
+        - The full grid (in blue)
+        - The sampled grid cells (in red), with a legend
+    
+        It also logs the total number of building samples relative to the full dataset,
+        and provides a count of the urban vs. rural classification.
+    
+        Logs:
+            - Total number of building samples over the total buildings
+            - Urban/rural distribution in the sampled buildings
+        """
         fig, ax = plt.subplots(figsize=(13, 13))
         self.grid.plot(ax=ax, edgecolor="blue", facecolor=None)
         self.grid_samples.plot(ax=ax, edgecolor="red", facecolor=None, legend=True)

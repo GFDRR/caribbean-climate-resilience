@@ -131,12 +131,7 @@ class DataAnnotator:
 
     def save_data(self) -> bool:
         """Safely saves data with verification."""
-        try:
-            # Create backup
-            backup_path = f"{self.path_to_file}.bak"
-            if os.path.exists(self.path_to_file):
-                shutil.copy2(self.path_to_file, backup_path)
-            
+        try:            
             # Prepare data for saving
             save_data = self.data.copy()
             if "filepath" in save_data.columns:
@@ -150,7 +145,8 @@ class DataAnnotator:
             
             # Verify save by reading back
             if self.mode == "aerial":
-                test_data = gpd.read_file(self.path_to_file)
+                #test_data = gpd.read_file(self.path_to_file)
+                test_data = self.load_data()
             else:
                 pd.read_csv(self.path_to_file)
                 
@@ -200,7 +196,7 @@ class DataAnnotator:
 
         # Initialize special columns if missing
         cols_to_add = {
-             "annotated": lambda d: d.apply(self._is_annotated, axis=1),
+            "annotated": lambda d: d.apply(self._is_annotated, axis=1),
             "clean": lambda d: d["filepath"].apply(geoutils.inspect_quality),
             "duplicate": lambda d: pd.Series(False, index=d.index)
         }

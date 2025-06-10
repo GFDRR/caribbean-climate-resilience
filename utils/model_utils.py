@@ -20,6 +20,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import timm
 
 from sklearn.preprocessing import (
     MinMaxScaler,
@@ -63,17 +64,17 @@ from torchgeo.models import (
     ScaleMAELarge16_Weights, scalemae_large_patch16
 )
 
+SEED = 42
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 NAIP_MEAN = [123.675, 116.28, 103.53] 
 NAIP_STD = [58.395, 57.12, 57.375] 
 NAIP_WAVELENGTHS = [0.665, 0.56, 0.49]
 
-SEED = 42
-
 
 def _get_scalers(scalers):
-    """Returns a list of scalers for hyperparameter optimization.
+    """
+    Returns a list of scalers for hyperparameter optimization.
 
     Args:
         scalers (list): A list of strings indicating the scalers
@@ -92,8 +93,8 @@ def _get_scalers(scalers):
 
 
 def _get_pipeline(model, selector):
-    """Instantiates and returns a pipeline based on
-    the input configuration.
+    """
+    Instantiates and returns a pipeline based on the input configuration.
 
     Args:
         model (object): The model instance to include in the pipeline.
@@ -119,7 +120,8 @@ def _get_pipeline(model, selector):
 
 
 def _get_params(scalers, model_params, selector_params):
-    """Instantiates the parameter grid for hyperparameter optimization.
+    """
+    Instantiates the parameter grid for hyperparameter optimization.
 
     Args:
         scalers (dict): A dictionary indicating the the list of scalers.
@@ -161,7 +163,8 @@ def _get_params(scalers, model_params, selector_params):
 
 
 def get_cv(c, cv):
-    """Returns a model selection instance.
+    """
+    Returns a model selection instance.
 
     Args:
         c (dict): The config dictionary indicating the model,
@@ -188,6 +191,24 @@ def get_cv(c, cv):
 
 
 def group_kfold(c, X, y, groups, test_size=0.2): 
+    """
+    Performs grouped cross-validation with GroupKFold after an initial train-test split using GroupShuffleSplit.
+
+    Args:
+        c (dict): Configuration dictionary, must include 'n_splits' for cross-validation.
+        X (pd.DataFrame): Feature dataframe.
+        y (pd.Series or np.ndarray): Target variable.
+        groups (pd.Series or np.ndarray): Group labels for the samples used while splitting the dataset.
+        test_size (float, optional): Proportion of the dataset to include in the test split. Defaults to 0.2.
+
+    Returns:
+        tuple:
+            cv (sklearn.model_selection.GridSearchCV or similar): Fitted cross-validator with best model.
+            result (dict): Evaluation metrics computed by `eval_utils.evaluate`.
+            report (pd.DataFrame): Classification report as a pandas DataFrame.
+            cm (sklearn.metrics.ConfusionMatrixDisplay): Confusion matrix display object.
+            preds (pd.DataFrame): DataFrame with columns `y_pred` and `y_test` containing predictions and ground truth.
+    """
     gss = GroupShuffleSplit(test_size=test_size, n_splits=1, random_state=42)
     split = gss.split(X, y, groups=groups)
     train_index, test_index = next(split)
@@ -293,16 +314,7 @@ def get_transform(model_name: str, image_size: int = 224):
             transforms.CenterCrop(image_size)
         ])
 
-    elif model_name == "ResNet50_FMOW_RGB_GASSL":
-        return transforms.Compose([
-            transforms.ToTensor(), 
-            transforms.Resize((image_size, image_size)), 
-            transforms.CenterCrop(image_size), 
-            transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
-        ])
-        model = torch.nn.Sequential(*list(model.children())[:-1])
-
-    elif model_name == "ScaleMAE_FMOW_RGB":
+    else:
         return transforms.Compose([
             transforms.ToTensor(), 
             transforms.Resize((image_size, image_size)), 
@@ -366,7 +378,8 @@ def generate_embeddings(
     filename = os.path.join(out_dir, f"{model_name}.csv")
     if os.path.exists(filename):
         embeddings = pd.read_csv(filename)
-        return embeddings
+        if len(embeddings) >= len(data):
+            return embeddings
     
     model = load_model(model_name)
     transform = get_transform(model_name)
