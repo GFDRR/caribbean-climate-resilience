@@ -42,7 +42,8 @@ def main(args):
     path_to_embeddings = config['path_to_embeddings'].format(mode=args.mode, iso_code=args.iso_code)
     path_to_file = config['path_to_file'].format(mode=args.mode, iso_code=args.iso_code)
 
-    data = gpd.read_file(path_to_file)
+    data = gpd.read_file(path_to_file).replace('nan', np.nan).dropna()
+    data = data[(data.duplicate == False) & (data.clean == True)]
     data["filepath"] = data.filename.apply(lambda x: os.path.join(path_to_images, x))
     logging.info(f"Data dimensions: {data.shape[0]}")
     for target_column in target_columns:
@@ -101,7 +102,7 @@ if __name__ == "__main__":
     parser.add_argument("--iso_code", help="ISO code", default="VCT")
     parser.add_argument("--mode", help="Aerial or streetview", default="aerial")
     parser.add_argument("--config", help="Main config", default="configs/config.yaml")
-    parser.add_argument("--model_config", help="Model config", default="configs/model_configs/ScaleMAE_FMOW_RGB-LR.yaml")
+    parser.add_argument("--model_config", help="Model config", default="configs/model_configs/ResNet50_FMOW_RGB_GASSL-LR.yaml")
     args = parser.parse_args()
         
     main(args)
