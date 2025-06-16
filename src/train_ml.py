@@ -18,6 +18,7 @@ import sys
 sys.path.insert(0, "./utils/")
 import model_utils
 import embed_utils
+import eval_utils
 
 # Config parsing
 import json
@@ -121,6 +122,7 @@ def main(args):
         cv, result, report, cm, preds = model_utils.group_kfold(
             config, X, y, groups, train_index, test_index
         )
+        result = {f"test_{key}": val for key, val in result.items()}
 
         # Output evaluation metrics
         logging.info(result)
@@ -135,14 +137,8 @@ def main(args):
             os.makedirs(exp_dir)
 
         # Save predictions and confusion matrix
-        preds.to_csv(os.path.join(exp_dir, f"{exp_name}.csv"))
-        cm.plot().figure_.savefig(os.path.join(exp_dir, "confusion_matrix.png"))
-
-        # Save results and performance report
-        with open(os.path.join(exp_dir, f"{exp_name}_result.json"), "w") as file:
-            json.dump(result, file)
-        report.to_csv(os.path.join(exp_dir, f"{exp_name}_report.csv"))
         result["target"] = target_column
+        eval_utils.save_results(preds, cm, result, report, exp_dir, exp_name)
 
         # Log results to Weights & Biases
         run = wandb.init(project=config["project"], config=config)
@@ -167,7 +163,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_config",
         help="Model config",
-        default="configs/ml_configs/ResNet50_FMOW_RGB_GASSL-LR.yaml",
+        default="configs/ml_configs/ResNet50_FMOW_RGB_GASSL-MLP.yaml",
     )
     args = parser.parse_args()
 

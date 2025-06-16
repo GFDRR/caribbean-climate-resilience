@@ -139,16 +139,9 @@ def main(args):
 
             model_file = os.path.join(exp_dir, f"{exp_name}.pth")
             torch.save(model.state_dict(), model_file)
-
-            val_preds.to_csv(os.path.join(c["exp_dir"], f"{exp_name}.csv"))
-            val_cm.plot().figure_.savefig(
-                os.path.join(c["exp_dir"], "confusion_matrix.png")
+            eval_utils.save_results(
+                val_preds, val_cm, val_results, val_report, c["exp_dir"], exp_name
             )
-            with open(
-                os.path.join(c["exp_dir"], f"{exp_name}_result.json"), "w"
-            ) as file:
-                json.dump(val_results, file)
-            val_report.to_csv(os.path.join(c["exp_dir"], f"{exp_name}_report.csv"))
 
         logging.info(f"Best {phase}_{scorer}: {best_score}")
         log_results = {key: val for key, val in best_results.items() if key[-1] != "_"}
@@ -185,11 +178,9 @@ def main(args):
         wandb=wandb,
         logging=logging,
     )
-    test_preds.to_csv(os.path.join(c["exp_dir"], f"{exp_name}.csv"))
-    test_cm.plot().figure_.savefig(os.path.join(c["exp_dir"], "confusion_matrix.png"))
-    with open(os.path.join(c["exp_dir"], f"{exp_name}_result.json"), "w") as file:
-        json.dump(test_results, file)
-    test_report.to_csv(os.path.join(c["exp_dir"], f"{exp_name}_report.csv"))
+    eval_utils.save_results(
+        test_preds, test_cm, test_results, test_report, c["exp_dir"], exp_name
+    )
     return test_results
 
 

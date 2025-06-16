@@ -1,3 +1,5 @@
+import os
+import json
 import pandas as pd
 from sklearn.metrics import (
     make_scorer,
@@ -11,6 +13,16 @@ from sklearn.metrics import (
     ConfusionMatrixDisplay,
     classification_report,
 )
+
+
+def save_results(preds, cm, result, report, exp_dir, exp_name):
+    preds.to_csv(os.path.join(exp_dir, f"{exp_name}.csv"))
+    cm.plot().figure_.savefig(os.path.join(exp_dir, "confusion_matrix.png"))
+
+    # Save results and performance report
+    with open(os.path.join(exp_dir, f"{exp_name}_result.json"), "w") as file:
+        json.dump(result, file)
+    report.to_csv(os.path.join(exp_dir, f"{exp_name}_report.csv"))
 
 
 def get_confusion_matrix(y_test, y_pred, class_names, encoded=False):
