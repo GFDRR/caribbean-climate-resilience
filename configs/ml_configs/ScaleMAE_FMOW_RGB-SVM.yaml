@@ -1,5 +1,7 @@
 project: "SLUv1"
-embed_model: "ResNet50_FMOW_RGB_GASSL"
+embed_model: "ScaleMAE_FMOW_RGB"
+group_column: "grid_id"
+test_size: 0.20
 model: 'SVC'
 model_params:
     kernel: ['linear', 'poly', 'rbf', 'sigmoid']
