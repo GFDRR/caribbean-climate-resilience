@@ -2,6 +2,7 @@ import os
 import time
 from tqdm import tqdm
 import pandas as pd
+import geopandas as gpd
 import numpy as np
 
 import matplotlib.pyplot as plt
@@ -14,7 +15,6 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.optim import lr_scheduler
 from torch.utils.data import Dataset
-from torch_lr_finder import LRFinder
 
 from torchvision import models, transforms
 from torchvision.models import (
@@ -35,9 +35,14 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as nnf
 import satlaspretrain_models
 
-from utils import eval_utils
-from utils import data_utils
-from utils import model_utils
+# from utils
+import eval_utils
+
+# from utils
+import data_utils
+
+# from utils
+import model_utils
 
 # Add temporary fix for hash error:
 # https://github.com/pytorch/vision/issues/7744
@@ -53,6 +58,9 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 imagenet_mean = [0.485, 0.456, 0.406]
 imagenet_std = [0.229, 0.224, 0.225]
+
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+os.environ["TORCH_USE_CUDA_DSA"] = "1"
 
 
 def get_state_dict(self, *args, **kwargs):
@@ -82,10 +90,10 @@ class CustomDataset(Dataset):
     def __init__(
         self,
         dataset: pd.DataFrame,
+        target: str,
         classes: dict,
         transform: Callable = None,
         normalize: str = "imagenet",
-        return_uid: bool = True,
     ):
         """
         Initializes the CustomDataset instance.
@@ -98,19 +106,10 @@ class CustomDataset(Dataset):
             return_uid (bool, optional): Flag to determine if UID should be returned. Defaults to True.
         """
         self.dataset = dataset
+        self.target = target
         self.transform = transform
         self.classes = classes
         self.normalize = normalize
-        self.return_uid = return_uid
-
-    def set_return_uid(self, return_uid: bool):
-        """
-        Sets the flag to determine if UID should be returned.
-
-        Args:
-            return_uid (bool): Flag to determine if UID should be returned.
-        """
-        self.return_uid = return_uid
 
     def __getitem__(self, index: int):
         """
@@ -125,34 +124,24 @@ class CustomDataset(Dataset):
         """
         # Get the row at the specified index
         item = self.dataset.iloc[index]
-        # Extract UID
-        uid = item["UID"]
         # Extract file path to the image
         filepath = item["filepath"]
 
         # Open the image and convert to RGB
         if os.path.exists(filepath):
-            while True:
-                try:
-                    image = Image.open(filepath).convert("RGB")
-                except:
-                    time.sleep(1)
-                else:
-                    break
+            # image = Image.open(filepath).convert("RGB")
+            image = Image.fromarray(data_utils.load_image(filepath))
 
         # Apply transformations if any
         if self.transform:
             x = self.transform(image)
 
         # Get the class label
-        y = self.classes[item["class"]]
+        y = self.classes[item[self.target]]
         image.close()
 
-        # Return image tensor, label, and UID
-        if self.return_uid:
-            return x, y, uid
-        else:
-            return x, y
+        # Return image tensor, label
+        return x, y
 
     def __len__(self):
         """
@@ -185,10 +174,10 @@ def visualize_data(
         None
     """
     # Get a batch of inputs, classes, and UIDs from the data loader
-    inputs, classes, uids = next(iter(data_loader[phase]))
+    inputs, classes = next(iter(data_loader[phase]))
 
     # Create a figure with a grid of subplots
-    fig, axes = plt.subplots(n, n, figsize=(6, 6), dpi=300)
+    fig, axes = plt.subplots(n, n, figsize=(6, 6))
 
     # Extract class labels and values
     key_list = list(data[phase].classes.keys())
@@ -236,7 +225,10 @@ def load_dataset(config: dict, phases: list, verbose: bool = True) -> tuple:
             - classes (list): List of unique class labels.
     """
     # Load the dataset with specified attributes and verbose option
-    dataset = model_utils.load_data(config, attributes=["rurban"], verbose=verbose)
+    dataset = gpd.read_file(config["path_to_file"]).dropna()
+    dataset = dataset[
+        (dataset.duplicate == False) & (dataset.clean == True)
+    ].reset_index()
 
     # Generate file paths for the images in the dataset
     dataset["filepath"] = dataset["filepath"] = dataset["filename"].apply(
@@ -244,22 +236,25 @@ def load_dataset(config: dict, phases: list, verbose: bool = True) -> tuple:
     )
 
     # Create a dictionary for class labels
-    classes_dict = {config["pos_class"]: 1, config["neg_class"]: 0}
+    # classes_dict = {config["pos_class"]: 1, config["neg_class"]: 0}
+    classes_dict = {x: i for i, x in enumerate(dataset[config["target"]].unique())}
+    logging.info(classes_dict)
 
     # Get normalization method and image transformations
     transforms = get_transforms(size=config["img_size"], normalize=config["normalize"])
 
     # List unique class labels in the dataset
-    classes = list(dataset["class"].unique())
+    classes = list(dataset[config["target"]].unique())
     if verbose:
         logging.info(f" Classes: {classes}")
 
     # Create a dictionary of SchoolDataset objects for each phase
     data = {
         phase: CustomDataset(
-            dataset[dataset.dataset == phase]
+            dataset[dataset[f"{config['target']}_dataset"] == phase]
             .sample(frac=1, random_state=SEED)
             .reset_index(drop=True),
+            config["target"],
             classes_dict,
             transforms[phase],
             normalize=config["normalize"],
@@ -288,8 +283,6 @@ def train(
     optimizer: optim.Optimizer,
     device: torch.device,
     logging: Any,
-    pos_label: int,
-    beta: float,
     optim_threshold: Optional[float] = None,
     wandb: Optional[Any] = None,
 ) -> Dict[str, Any]:
@@ -315,11 +308,11 @@ def train(
     model.train()
 
     # Initialize lists to store actual labels, predicted labels, and prediction probabilities
-    y_actuals, y_preds, y_probs = [], [], []
+    y_actuals, y_preds = [], []
     running_loss = 0.0
 
     # Iterate over batches of data from the data loader
-    for inputs, labels, _ in tqdm(data_loader, total=len(data_loader)):
+    for inputs, labels in tqdm(data_loader, total=len(data_loader)):
         inputs = inputs.to(device)  # Move inputs to the specified device
         labels = labels.to(device)  # Move labels to the specified device
 
@@ -329,8 +322,6 @@ def train(
         with torch.set_grad_enabled(True):
             outputs = model(inputs)
             _, preds = torch.max(outputs, 1)
-            soft_outputs = nnf.softmax(outputs, dim=1)
-            probs = soft_outputs[:, 1]
             loss = criterion(outputs, labels)
 
             loss.backward()  # Backward pass
@@ -339,20 +330,12 @@ def train(
             running_loss += loss.item() * inputs.size(0)
             y_actuals.extend(labels.cpu().numpy().tolist())
             y_preds.extend(preds.data.cpu().numpy().tolist())
-            y_probs.extend(probs.data.cpu().numpy().tolist())
 
     # Calculate epoch loss
     epoch_loss = running_loss / len(data_loader)
 
     # Evaluate the model's performance
-    epoch_results = eval_utils.evaluate(
-        y_actuals,
-        y_preds,
-        y_probs,
-        pos_label,
-        beta=beta,
-        optim_threshold=optim_threshold,
-    )
+    epoch_results, epoch_report = eval_utils.evaluate(y_actuals, y_preds)
 
     # Add loss to the results
     epoch_results["loss"] = epoch_loss
@@ -378,10 +361,7 @@ def evaluate(
     criterion: nn.Module,
     device: torch.device,
     logging: Any,
-    pos_label: int,
-    beta: float,
     phase: str,
-    optim_threshold: Optional[float] = None,
     wandb: Optional[Any] = None,
 ) -> Tuple[Dict[str, Any], Tuple[torch.Tensor, Dict[str, Any], str], pd.DataFrame]:
     """
@@ -410,12 +390,9 @@ def evaluate(
     # Initialize lists to store UIDs, actual labels, predicted labels, and prediction probabilities
     y_uids, y_actuals, y_preds, y_probs = [], [], [], []
     running_loss = 0.0  # Initialize running loss
-    confusion_matrix = torch.zeros(
-        len(class_names), len(class_names)
-    )  # Initialize confusion matrix
 
     # Iterate over batches of data from the data loader
-    for inputs, labels, uids in tqdm(data_loader, total=len(data_loader)):
+    for inputs, labels in tqdm(data_loader, total=len(data_loader)):
         inputs = inputs.to(device)  # Move inputs to the specified device
         labels = labels.to(device)  # Move labels to the specified device
 
@@ -423,39 +400,26 @@ def evaluate(
         with torch.set_grad_enabled(False):
             outputs = model(inputs)
             _, preds = torch.max(outputs, 1)
-            soft_outputs = nnf.softmax(outputs, dim=1)
-            probs = soft_outputs[:, 1]
             loss = criterion(outputs, labels)
 
         # Update running loss
         running_loss += loss.item() * inputs.size(0)
         y_actuals.extend(labels.cpu().numpy().tolist())
         y_preds.extend(preds.data.cpu().numpy().tolist())
-        y_probs.extend(probs.data.cpu().numpy().tolist())
-        y_uids.extend(uids)
 
     # Calculate epoch loss
     epoch_loss = running_loss / len(data_loader)
 
     # Evaluate the model's performance
-    epoch_results = eval_utils.evaluate(
-        y_actuals,
-        y_preds,
-        y_probs,
-        pos_label,
-        beta=beta,
-        optim_threshold=optim_threshold,
-    )
+    epoch_results, epoch_report = eval_utils.evaluate(y_actuals, y_preds)
     epoch_results["loss"] = epoch_loss
     epoch_results = {f"{phase}_{key}": val for key, val in epoch_results.items()}
 
     # Generate confusion matrix and related metrics
-    confusion_matrix, cm_metrics, cm_report = eval_utils.get_confusion_matrix(
-        y_actuals, y_preds, class_names
+    cm, cm_display, cm_metrics = eval_utils.get_confusion_matrix(
+        y_actuals, y_preds, class_names, encoded=True
     )
-    preds = pd.DataFrame(
-        {"UID": y_uids, "y_true": y_actuals, "y_preds": y_preds, "y_probs": y_probs}
-    )
+    preds = pd.DataFrame({"y_true": y_actuals, "y_preds": y_preds})
 
     # Log the results
     log_results = {key: val for key, val in epoch_results.items() if key[-1] != "_"}
@@ -465,7 +429,7 @@ def evaluate(
     if wandb is not None:
         wandb.log(log_results)
 
-    return epoch_results, (confusion_matrix, cm_metrics, cm_report), preds
+    return epoch_results, epoch_report, cm_display, preds
 
 
 def get_transforms(
@@ -680,87 +644,8 @@ def load_model(
     # Set up the optimizer based on the specified type
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    # Optionally find the optimal learning rate
-    if lr_finder:
-        lr = run_lr_finder(
-            data_loader,
-            model,
-            optimizer,
-            criterion,
-            device,
-            start_lr=start_lr,
-            end_lr=end_lr,
-            num_iter=num_iter,
-        )
-        for param in optimizer.param_groups:
-            param["lr"] = lr
-
     # Set up the learning rate scheduler based on the specified type
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, factor=0.1, patience=patience, mode="min"
     )
     return model, criterion, optimizer, scheduler
-
-
-def run_lr_finder(
-    data_loader: Dict[str, DataLoader],
-    model: nn.Module,
-    optimizer: optim.Optimizer,
-    criterion: nn.Module,
-    device: str,
-    start_lr: float,
-    end_lr: float,
-    num_iter: int,
-    plot: bool = False,
-) -> float:
-    """
-    Run a learning rate finder to determine the optimal learning rate.
-
-    Args:
-        data_loader (Dict[str, DataLoader]): Dictionary containing DataLoaders for different phases.
-        model (nn.Module): The model to test.
-        optimizer (optim.Optimizer): The optimizer to use.
-        criterion (nn.Module): The loss function.
-        device (str): Device to run the model on ("cpu" or "cuda").
-        start_lr (float): Starting learning rate for the range test.
-        end_lr (float): Ending learning rate for the range test.
-        num_iter (int): Number of iterations to run the range test.
-        plot (bool, optional): If True, plot the learning rate vs. loss. Defaults to False.
-
-    Returns:
-        float: The best learning rate found.
-    """
-    # Initialize the learning rate finder
-    lr_finder = LRFinder(model, optimizer, criterion, device=device)
-
-    # Perform the range test
-    lr_finder.range_test(
-        data_loader["val"],  # Use validation data loader
-        start_lr=start_lr,  # Starting learning rate
-        end_lr=end_lr,  # Ending learning rate
-        num_iter=num_iter,  # Number of iterations
-        step_mode="exp",  # Use exponential step mode
-    )
-
-    # Optionally plot the learning rate vs. loss
-    if plot:
-        lr_finder.plot()
-
-    # Extract learning rates and corresponding losses from the history
-    lrs = np.array(lr_finder.history["lr"])
-    losses = np.array(lr_finder.history["loss"])
-
-    # Calculate the gradient of the loss curve
-    min_grad_idx = (np.gradient(np.array(losses))).argmin()
-
-    # Determine the best learning rate as the one where the gradient is minimal
-    best_lr = start_lr
-    if min_grad_idx is not None:
-        best_lr = lrs[min_grad_idx]
-
-    # Log the best learning rate found
-    logging.info(f"Best lr: {best_lr}")
-
-    # Reset the model and optimizer to their initial states
-    lr_finder.reset()
-    return best_lr

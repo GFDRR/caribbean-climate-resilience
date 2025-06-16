@@ -10,6 +10,40 @@ import torch
 import cv2
 
 
+def load_image(image_file: str, padding_color: tuple = (0, 0, 0)):
+    """
+    Load an image and pad it to make it square.
+
+    Args:
+        image_file (str): Path to the image file.
+        padding_color (tuple, optional): RGB values for padding. Defaults to black.
+
+    Returns:
+        np.ndarray: Padded RGB image.
+    """
+    image = cv2.imread(image_file)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    height, width, channels = image.shape
+    max_size = max(height, width)
+
+    pad_top = (max_size - height) // 2
+    pad_bottom = max_size - height - pad_top
+    pad_left = (max_size - width) // 2
+    pad_right = max_size - width - pad_left
+
+    # Pad the image
+    image = cv2.copyMakeBorder(
+        image,
+        pad_top,
+        pad_bottom,
+        pad_left,
+        pad_right,
+        cv2.BORDER_CONSTANT,
+        value=padding_color,
+    )
+    return image
+
+
 def remove_duplicates(
     data: pd.DataFrame,
     hash_size: int = 8,

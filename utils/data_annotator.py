@@ -20,8 +20,8 @@ from ipyannotations.controls import togglebuttongroup as tbg
 from PIL import Image as PILImage
 from matplotlib import pyplot as plt
 
-from utils import geoutils
-from utils import model_utils
+from utils import data_utils
+from utils import embed_utils
 
 logging.basicConfig(level=logging.INFO)
 
@@ -132,6 +132,7 @@ class DataAnnotator:
         try:
             # Prepare data for saving
             save_data = self.data.copy()
+            save_data = save_data.replace("nan", np.nan)
             if "filepath" in save_data.columns:
                 save_data = save_data.drop(columns=["filepath"])
 
@@ -193,7 +194,7 @@ class DataAnnotator:
         # Initialize special columns if missing
         cols_to_add = {
             "annotated": lambda d: d.apply(self._is_annotated, axis=1),
-            "clean": lambda d: d["filepath"].apply(geoutils.inspect_quality),
+            "clean": lambda d: d["filepath"].apply(data_utils.inspect_quality),
             "duplicate": lambda d: pd.Series(False, index=d.index),
         }
 
@@ -409,7 +410,7 @@ class DataAnnotator:
                 if index >= len(uids):
                     break
                 item = data.query(f"UID == {uids[index]}")
-                image = model_utils.load_image(item.filepath.values[0])
+                image = data_utils.load_image(item.filepath.values[0])
 
                 axes[i, j].imshow(image)
                 axes[i, j].axis("off")
@@ -449,7 +450,7 @@ class DataAnnotator:
         Returns:
             GridspecLayout: Grid layout of similar images for validation.
         """
-        self.embeddings = model_utils.generate_embeddings(
+        self.embeddings = embed_utils.generate_embeddings(
             data=self.data,
             image_dir=self.path_to_images,
             out_dir=self.path_to_embeddings,
@@ -457,7 +458,7 @@ class DataAnnotator:
         )
 
         query = self.embeddings.iloc[query_index, :-1].to_numpy()
-        query_image = model_utils.load_image(self.data.iloc[query_index].filepath)
+        query_image = data_utils.load_image(self.data.iloc[query_index].filepath)
 
         embeddings = self.embeddings.copy()
         valid_uids = list(self.data.UID.unique())
@@ -474,7 +475,7 @@ class DataAnnotator:
         indexes = embeddings.index
         embeddings_vector = embeddings.iloc[:, :-1].to_numpy()
 
-        indexes = model_utils.top_n_similarity(
+        indexes = embed_utils.top_n_similarity(
             query, embeddings_vector, indexes, n=n + 1
         )
         indexes = [index[0] for index in indexes[1:]]
@@ -521,7 +522,7 @@ class DataAnnotator:
         grid = GridspecLayout(n_rows * row_inc + n_rows + 1, n_cols)
 
         def add_image(item):
-            image = model_utils.load_image(item.filepath)
+            image = data_utils.load_image(item.filepath)
             membuf = BytesIO()
             from PIL import Image
 

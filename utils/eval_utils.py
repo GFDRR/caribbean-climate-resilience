@@ -7,10 +7,13 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
     f1_score,
+    confusion_matrix,
+    ConfusionMatrixDisplay,
+    classification_report,
 )
 
 
-def get_confusion_matrix(y_test, y_pred, class_names):
+def get_confusion_matrix(y_test, y_pred, class_names, encoded=False):
     """Generates the confusion matrix given the predictions
     and ground truth values.
 
@@ -28,11 +31,13 @@ def get_confusion_matrix(y_test, y_pred, class_names):
     y_pred = pd.Series(y_pred, name="Predicted")
     y_test = pd.Series(y_test, name="Actual")
 
-    cm = confusion_matrix(y_test, y_pred, labels=class_names)
+    labels = class_names if not encoded else [x for x in range(len(class_names))]
+    cm = confusion_matrix(y_test, y_pred, labels=labels)
+    cm_display = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_names)
     cm = pd.DataFrame(cm, index=class_names, columns=class_names)
 
     cm_metrics = _get_cm_metrics(cm, list(cm.columns))
-    return cm, cm_metrics
+    return cm, cm_display, cm_metrics
 
 
 def _get_cm_metrics(cm, class_names):
@@ -75,8 +80,10 @@ def evaluate(y_true, y_pred):
     Returns:
         dict: A dictionary of performance metrics.
     """
+    report = classification_report(y_true, y_pred, zero_division=0, output_dict=True)
+    report = pd.DataFrame(report).transpose()
 
-    return {
+    results = {
         "overall_accuracy": accuracy_score(y_true, y_pred),
         "kappa": cohen_kappa_score(y_true, y_pred),
         "recall_score": recall_score(y_true, y_pred, average="macro", zero_division=0),
@@ -85,6 +92,7 @@ def evaluate(y_true, y_pred):
         ),
         "f1_score": f1_score(y_true, y_pred, average="macro", zero_division=0),
     }
+    return results, report
 
 
 def get_scoring():
