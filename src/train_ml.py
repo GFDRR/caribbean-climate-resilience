@@ -93,6 +93,9 @@ def main(args):
 
     # Loop through each target column to train a separate model
     for target_column in target_columns:
+        config["target"] = target_column
+        run = wandb.init(project=config["project"], config=config)
+
         group_column = config["group_column"]  # Used for grouped cross-validation
         feature_columns = [str(x) for x in range(n_features)]
 
@@ -137,11 +140,9 @@ def main(args):
             os.makedirs(exp_dir)
 
         # Save predictions and confusion matrix
-        result["target"] = target_column
         eval_utils.save_results(preds, cm, result, report, exp_dir, exp_name)
 
         # Log results to Weights & Biases
-        run = wandb.init(project=config["project"], config=config)
         run.name = exp_name
         wandb_report = wandb.Table(dataframe=report)
         run.log(result)
