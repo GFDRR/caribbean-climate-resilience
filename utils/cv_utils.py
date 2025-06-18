@@ -46,6 +46,7 @@ import model_utils
 
 # Add temporary fix for hash error:
 # https://github.com/pytorch/vision/issues/7744
+from torchvision.ops import sigmoid_focal_loss
 from torchvision.models._api import WeightsEnum
 from torch.hub import load_state_dict_from_url
 from typing import Union, Any, Tuple, Dict, Optional, Callable
@@ -131,6 +132,20 @@ class CustomDataset(Dataset):
         if os.path.exists(filepath):
             # image = Image.open(filepath).convert("RGB")
             image = Image.fromarray(data_utils.load_image(filepath))
+            orig_size = image.size
+            if item["aoi"] != "VCT":
+                if item["aoi"] == "DOM":
+                    scale = 2.5
+                elif item["aoi"] == "LCA":
+                    scale = 5
+                else:
+                    scale = 6
+                image.thumbnail([orig_size[0] / scale, orig_size[1] / scale])
+                image = image.transform(
+                    orig_size,
+                    Image.EXTENT,
+                    (0, 0, orig_size[0] / scale, orig_size[1] / scale),
+                )
 
         # Apply transformations if any
         if self.transform:
@@ -225,14 +240,20 @@ def load_dataset(config: dict, phases: list, verbose: bool = True) -> tuple:
             - classes (list): List of unique class labels.
     """
     # Load the dataset with specified attributes and verbose option
-    dataset = gpd.read_file(config["path_to_file"]).dropna()
-    dataset = dataset[
-        (dataset.duplicate == False) & (dataset.clean == True)
-    ].reset_index()
+    dataset = gpd.read_file(config["path_to_file"]).reset_index()
 
     # Generate file paths for the images in the dataset
-    dataset["filepath"] = dataset["filepath"] = dataset["filename"].apply(
-        lambda x: os.path.join(config["path_to_images"], x)
+    # dataset["filepath"] = dataset["filename"].apply(
+    #    lambda x: os.path.join(config["path_to_images"], x)
+    # )
+    dataset["filepath"] = dataset.apply(
+        lambda x: os.path.join(
+            config["path_to_images"].format(
+                mode=config["mode"], iso_code=x["iso_code"]
+            ),
+            x["filename"],
+        ),
+        axis=1,
     )
 
     # Create a dictionary for class labels
@@ -249,9 +270,10 @@ def load_dataset(config: dict, phases: list, verbose: bool = True) -> tuple:
         logging.info(f" Classes: {classes}")
 
     # Create a dictionary of SchoolDataset objects for each phase
+    phases = {"train": "train", "val": "test", "test": "test"}
     data = {
         phase: CustomDataset(
-            dataset[dataset[f"{config['target']}_dataset"] == phase]
+            dataset[dataset[f"{config['target']}_dataset"] == phases[phase]]
             .sample(frac=1, random_state=SEED)
             .reset_index(drop=True),
             config["target"],
@@ -598,6 +620,7 @@ def load_model(
     num_iter: int = 1000,
     lr_finder: bool = True,
     model_file: str = None,
+    loss: str = "cross_entropy",
 ):
     """
     Load a model, set up the optimizer, loss function, and learning rate scheduler.
@@ -639,7 +662,10 @@ def load_model(
     model = model.to(device)  # Move the model to the specified device
 
     # Define the loss function with optional label smoothing
-    criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+    if loss == "cross_entropy_loss":
+        criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+    elif loss == "focal_loss":
+        criterion = sigmoid_focal_loss
 
     # Set up the optimizer based on the specified type
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)

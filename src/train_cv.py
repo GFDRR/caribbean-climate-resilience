@@ -42,16 +42,16 @@ def main(args):
     c["target"] = args.target
     c["mode"] = args.mode
 
-    c["path_to_images"] = c["path_to_images"].format(
-        mode=args.mode, iso_code=args.iso_code
-    )
-    c["path_to_file"] = c["path_to_file"].format(mode=args.mode, iso_code=args.iso_code)
+    # c["path_to_images"] = c["path_to_images"].format(mode=args.mode, iso_code=args.iso_code)
+    c["path_to_file"] = c["path_to_file"].format(mode=args.mode)
 
     # Set wandb configs
     wandb.init(project=c["project"], config=c)
 
     # Create experiment folder
     exp_name = f"{c['target']}-{c['model']}-{c['iso_code']}"
+    if args.suffix is not None:
+        exp_name = f"{exp_name}-{args.suffix}"
     exp_dir = os.path.join(cwd, "exp/", c["iso_code"], exp_name)
     c["exp_dir"] = exp_dir
     logging.info(f"Experiment directory: {exp_dir}")
@@ -70,10 +70,12 @@ def main(args):
     wandb.run.name = exp_name
 
     # Load dataset
-    phases = ["train", "test"]
+    phases = ["train", "val", "test"]
     data, data_loader, classes = cv_utils.load_dataset(config=c, phases=phases)
     logging.info(classes)
-    logging.info(f"Train/val/test sizes: {len(data['train'])}/{len(data['test'])}")
+    logging.info(
+        f"Train/val/test sizes: {len(data['train'])}/{len(data['val'])}/{len(data['test'])}"
+    )
     wandb.log({f"{phase}_size": len(data[phase]) for phase in phases})
 
     # Load model, optimizer, and scheduler
@@ -88,8 +90,10 @@ def main(args):
         patience=c["patience"],
         data_loader=data_loader,
         device=device,
+        loss=c["loss"],
     )
     logging.info(model)
+    logging.info(criterion)
 
     lr = optimizer.param_groups[0]["lr"]
     logging.info(f"LR: {lr}")
@@ -119,7 +123,7 @@ def main(args):
             logging=logging,
         )
         # Evauate model
-        phase = "test"
+        phase = "val"
         val_results, val_report, val_cm, val_preds = cv_utils.evaluate(
             data_loader[phase],
             class_names=classes,
@@ -175,12 +179,15 @@ def main(args):
         criterion=criterion,
         device=device,
         phase=phase,
-        wandb=wandb,
+        wandb=None,
         logging=logging,
     )
     eval_utils.save_results(
         test_preds, test_cm, test_results, test_report, c["exp_dir"], exp_name
     )
+    wandb_report = wandb.Table(dataframe=test_report)
+    wandb.log({"report": wandb_report})
+    wandb.log(test_results)
     return test_results
 
 
@@ -196,8 +203,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_config",
         help="Model config",
-        default="configs/cv_configs/convnext_base.yaml",
+        default="configs/cv_configs/convnext_small.yaml",
     )
+    parser.add_argument("--suffix", help="Experiment suffix", default=None)
     args = parser.parse_args()
 
     main(args)
