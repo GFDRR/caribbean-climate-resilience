@@ -1,5 +1,5 @@
 path_to_images: "data/{mode}/raster/{iso_code}/tiles_{iso_code}/"
-path_to_file: "data/{mode}/vector/{iso_code}/tiles_{iso_code}.geojson"
+path_to_file: "data/aerial/vector//train_LCA_DOM_VCT.csv"
 path_to_embeddings: "data/{mode}/vector/{iso_code}/embeddings/"
 
 aerial: {
