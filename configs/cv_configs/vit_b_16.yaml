@@ -4,7 +4,7 @@ n_workers: 0
 n_epochs: 30
 scorer: "f1_score"
 
-model: "convnext_small"
+model: "vit_b_16"
 pretrained: True
 scheduler: "ReduceLROnPlateau"
 optimizer: "Adam"
