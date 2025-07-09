@@ -1,6 +1,0 @@
-building_material : ['Plaster', 'Wood - Polished/Crude/Plank', 'Other', 'Brick/Cement/Concrete Block']
-building_completeness : ['Complete', 'Incomplete']
-building_security : ['Secured', 'Unsecured']
-building_foundation : ['Strip Foundation/Footing', 'House on Columns']
-number_of_stories : ['Three stories and above', 'Two stories', 'One story']
-building_occupancy : ['Residential', 'Non-residential']

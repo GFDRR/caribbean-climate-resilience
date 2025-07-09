@@ -9,11 +9,12 @@ import zipfile
 import leafmap
 import geojson
 
-from tqdm import tqdm 
-import geopandas as gpd
+from tqdm import tqdm
 from rapidfuzz import fuzz
 
 import pandas as pd
+import geopandas as gpd
+from shapely import wkt
 from shapely.geometry import shape
 
 iso_codes_url = "https://raw.githubusercontent.com/lukes/ISO-3166-Countries-with-Regional-Codes/master/all/all.csv"
@@ -26,6 +27,7 @@ class DownloadProgressBar(tqdm):
     Methods:
         update_to(b, bsize, tsize): Updates the progress bar.
     """
+
     def update_to(self, b: int = 1, bsize: int = 1, tsize: int = None):
         """
         Update the progress bar.
@@ -44,12 +46,12 @@ class DownloadProgressBar(tqdm):
 
 
 def download_buildings(
-    iso_code: str, 
-    vector_dir: str = "data/aerial/vector/", 
-    source: str = "ms", 
+    iso_code: str,
+    vector_dir: str = "data/aerial/vector/",
+    source: str = "ms",
     country: str = None,
     out_file: str = None,
-    verbose: bool = False
+    verbose: bool = False,
 ) -> None:
     """
     Download building footprints from Microsoft or Google datasets for a given ISO country code.
@@ -66,28 +68,28 @@ def download_buildings(
 
     microsoft_url = "https://minedbuildings.z5.web.core.windows.net/global-buildings/dataset-links.csv"
     google_url = "https://openbuildings-public-dot-gweb-research.uw.r.appspot.com/public/tiles.geojson"
-    
-    def get_country(iso_code, source: str = "ms"): 
+
+    def get_country(iso_code, source: str = "ms"):
         msf_links = pd.read_csv(microsoft_url)
-        
+
         codes = pd.read_csv(iso_codes_url)
         subcode = codes.query(f"`alpha-3` == '{iso_code}'")
         country = subcode["name"].values[0].replace(" ", "").split("(")[0]
-    
+
         match = None
         max_score = 0
         for msf_country in msf_links.Location.unique():
             # Adjust the Microsoft country name for better matching
             msf_country_ = re.sub(r"(\w)([A-Z])", r"\1 \2", msf_country)
-        
+
             # Calculate the similarity score between the country names
             score = fuzz.token_sort_ratio(country, msf_country_)
             if score > max_score:
                 max_score = score
                 match = msf_country
-        
+
         return match
-        
+
     # Create output directories
     out_dir = os.path.join(vector_dir, iso_code)
     os.makedirs(out_dir, exist_ok=True)
@@ -123,7 +125,7 @@ def download_buildings(
                 )
         except Exception as e:
             logging.info(e)
-            
+
     return out_file
 
 
@@ -222,7 +224,7 @@ def download_google_buildings(
     Returns:
         list: List of paths to downloaded files or merged output.
     """
-    
+
     country_url = (
         "https://naciscdn.org/naturalearth/110m/cultural/ne_110m_admin_0_countries.zip"
     )
@@ -308,7 +310,7 @@ def download_geoboundary(
     Returns:
         geopandas.GeoDataFrame: The downloaded administrative boundary as a GeoDataFrame.
     """
-    
+
     # Define the output file path for the GeoJSON file
     out_file = os.path.join(out_dir, f"{adm_level}_{iso_code}.geojson")
 
@@ -319,7 +321,7 @@ def download_geoboundary(
     gbhumanitarian_url = "https://www.geoboundaries.org/api/current/gbHumanitarian/"
     gbopen_url = "https://www.geoboundaries.org/api/current/gbOpen/"
     natural_earth_url = "https://raw.githubusercontent.com/eFrane/admin0/refs/heads/master/{}/{}.geojson"
-    
+
     url = f"{gbhumanitarian_url}{iso_code}/{adm_level}/"
     download_path = None
     try:
@@ -327,7 +329,7 @@ def download_geoboundary(
         download_path = r.json()["gjDownloadURL"]
     except:
         pass
-    
+
     # Fallback to GBOpen URL if GBHumanitarian URL fails
     if download_path is None:
         try:
@@ -364,13 +366,13 @@ def download_ghsl_smod(out_dir: str = "data/aerial/raster/") -> None:
     Download and extract the Global Human Settlement Layer (GHSL) Settlement Model (SMOD) raster file for 2030.
 
     Args:
-        out_dir (str, optional): Directory where the raster data will be stored. 
+        out_dir (str, optional): Directory where the raster data will be stored.
             Defaults to "data/aerial/raster/".
 
     Returns:
         str: Path to the extracted GHSL SMOD TIFF file.
     """
-    
+
     # Create the GHSL folder in the rasters directory
     ghsl_dir = os.path.join(out_dir, "GHSL")
     os.makedirs(ghsl_dir, exist_ok=True)
@@ -384,17 +386,26 @@ def download_ghsl_smod(out_dir: str = "data/aerial/raster/") -> None:
         ghsl_zip = os.path.join(ghsl_dir, "ghsl_smod.zip")
 
         if not os.path.exists(ghsl_zip):
-            with DownloadProgressBar(unit='B', unit_scale=True, miniters=1, desc="GHSL SMOD") as pbar:
-                urllib.request.urlretrieve(ghsl_smod_url, ghsl_zip, reporthook=pbar.update_to)
+            with DownloadProgressBar(
+                unit="B", unit_scale=True, miniters=1, desc="GHSL SMOD"
+            ) as pbar:
+                urllib.request.urlretrieve(
+                    ghsl_smod_url, ghsl_zip, reporthook=pbar.update_to
+                )
 
         if not os.path.exists(ghsl_path):
-            with zipfile.ZipFile(ghsl_zip, 'r') as zip_ref:
+            with zipfile.ZipFile(ghsl_zip, "r") as zip_ref:
                 zip_ref.extractall(ghsl_dir)
 
     return ghsl_path
 
 
-def download_imagery(iso_code: str, out_file: str, image_urls: list = [], out_dir: str = "data/aerial/raster/"):
+def download_imagery(
+    iso_code: str,
+    out_file: str,
+    image_urls: list = [],
+    out_dir: str = "data/aerial/raster/",
+):
     """Downloads aerial imagery for a given country using provided URLs.
 
     Supports both single-image downloads and multi-image mosaics.
@@ -418,8 +429,12 @@ def download_imagery(iso_code: str, out_file: str, image_urls: list = [], out_di
         os.makedirs(image_dir, exist_ok=True)
         image_file = os.path.join(image_dir, out_file)
         if not os.path.exists(image_file):
-            with DownloadProgressBar(unit='B', unit_scale=True, miniters=1, desc=image_urls[0]) as pbar:
-                urllib.request.urlretrieve(image_urls[0], image_file, reporthook=pbar.update_to)
+            with DownloadProgressBar(
+                unit="B", unit_scale=True, miniters=1, desc=image_urls[0]
+            ) as pbar:
+                urllib.request.urlretrieve(
+                    image_urls[0], image_file, reporthook=pbar.update_to
+                )
         return image_file
 
     # Handle multiple images
@@ -431,26 +446,32 @@ def download_imagery(iso_code: str, out_file: str, image_urls: list = [], out_di
         image_name = image_url.split("/")[-1]
         image_path = os.path.join(image_dir, image_name)
         if not os.path.exists(image_path):
-            with DownloadProgressBar(unit='B', unit_scale=True, miniters=1, desc=image_name) as pbar:
-                urllib.request.urlretrieve(image_url, image_path, reporthook=pbar.update_to)
+            with DownloadProgressBar(
+                unit="B", unit_scale=True, miniters=1, desc=image_name
+            ) as pbar:
+                urllib.request.urlretrieve(
+                    image_url, image_path, reporthook=pbar.update_to
+                )
         images.append(image_path.replace("\\", "/"))
 
     # Write file list for GDAL
-    text_file = os.path.join(image_dir, out_file.split(".")[0]+".txt")
+    text_file = os.path.join(image_dir, out_file.split(".")[0] + ".txt")
     if not os.path.exists(text_file):
-        with open(text_file, 'w') as f:
+        with open(text_file, "w") as f:
             for image in images:
                 f.write(f"{image}\n")
 
     # Build VRT mosaic
-    vrt_file = os.path.join(image_dir, out_file.split(".")[0]+".vrt")
+    vrt_file = os.path.join(image_dir, out_file.split(".")[0] + ".vrt")
     if not os.path.exists(vrt_file):
-        subprocess.call(f"gdalbuildvrt -input_file_list {text_file} {vrt_file}", shell=True)  
+        subprocess.call(
+            f"gdalbuildvrt -input_file_list {text_file} {vrt_file}", shell=True
+        )
 
     # Translate VRT to GeoTIFF
     image_file = os.path.join(os.getcwd(), out_dir, iso_code, out_file)
     if not os.path.exists(image_file):
-        subprocess.call(f"gdal_translate -of GTiff {vrt_file} {image_file}", shell=True)  
+        subprocess.call(f"gdal_translate -of GTiff {vrt_file} {image_file}", shell=True)
     logging.info(f"Image saved to {image_file}")
-    
+
     return image_file
